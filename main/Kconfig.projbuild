@@ -2,9 +2,15 @@ menu "Template Configuration"
 
     config WIFI_SSID
         string "WiFi SSID"
-        default "MyDefaultSSID"
+        default "Wind3 HUB - DDAF85_guest1"
         help
             SSID of the WiFi network to connect to.
+
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default "9ga6pague2hst6zs"
+        help
+            Password of the WiFi network to connect to.
 
     config BLINK_GPIO_PIN
         int "Blink GPIO Pin"
