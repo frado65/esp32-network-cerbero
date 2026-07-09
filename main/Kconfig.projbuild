@@ -1,0 +1,15 @@
+menu "Template Configuration"
+
+    config WIFI_SSID
+        string "WiFi SSID"
+        default "MyDefaultSSID"
+        help
+            SSID of the WiFi network to connect to.
+
+    config BLINK_GPIO_PIN
+        int "Blink GPIO Pin"
+        default 2
+        help
+            GPIO pin number to blink (typically GPIO 2 for onboard LED on many ESP32 dev boards).
+
+endmenu

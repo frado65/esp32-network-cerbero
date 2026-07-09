@@ -1,0 +1,16 @@
+# ESP-IDF build directory
+build/
+
+# SDK config files
+sdkconfig
+sdkconfig.old
+sdkconfig.defaults.old
+
+# Temporary files
+*.swp
+*~
+.DS_Store
+
+# VS Code and editor folders
+.vscode/
+.settings/
