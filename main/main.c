@@ -401,11 +401,12 @@ static void diagnostics_task(void *pvParameters) {
         ESP_LOGI(TAG, "LAN Check PASSED.");
 
         // 3. Controllo WAN: Stessa logica del controllo LAN, ma punta all'8.8.8.8
+        const char* target_ip_str = (strlen(device_config.ping_ip) > 0) ? device_config.ping_ip : "8.8.8.8";
         ip_addr_t wan_ip;
-        ip4addr_aton("8.8.8.8", &wan_ip.u_addr.ip4);
+        ip4addr_aton(target_ip_str, &wan_ip.u_addr.ip4); // ip4addr_aton("8.8.8.8", &wan_ip.u_addr.ip4);
         wan_ip.type = IPADDR_TYPE_V4;
 
-        ESP_LOGI(TAG, "Check 2/3: WAN - Pinging DNS at 8.8.8.8...");
+        ESP_LOGI(TAG, "Check 2/3: WAN - Pinging DNS at %s...", target_ip_str);
         if (!perform_ping(&wan_ip)) {
             ESP_LOGE(TAG, "WAN Check FAILED!");
             led_blink_start(200, 200, 5000, true); // Comando di lampeggio medio
@@ -418,16 +419,21 @@ static void diagnostics_task(void *pvParameters) {
         }
         ESP_LOGI(TAG, "WAN Check PASSED.");
 
+        // Recupera l'host dall'NVS, con fallback di sicurezza se la stringa è vuota
+        const char* target_host = (strlen(device_config.ping_host) > 0) ? device_config.ping_host : "google.it";
+
         // 4. Controllo DNS: Risolve l'hostname
-        ESP_LOGI(TAG, "Check 3/3: DNS - Resolving name google.it...");
+        ESP_LOGI(TAG, "Check 3/3: DNS - Resolving name %s...", target_host);
+        
         struct addrinfo hints = {
             .ai_family = AF_INET,       // Forza la ricerca di un IPv4
             .ai_socktype = SOCK_STREAM, // Tipo di socket (ininfluente per la sola risoluzione)
         };
         struct addrinfo *res = NULL;
+        
         // Chiamata all'API POSIX di lwIP per convertire l'URL nell'IP binario.
         // È bloccante, interroga il server DNS configurato sul router (ricevuto via DHCP)
-        int err = getaddrinfo("google.it", NULL, &hints, &res);
+        int err = getaddrinfo(target_host, NULL, &hints, &res);
         bool dns_success = false;
 
         if (err == 0 && res != NULL) {
@@ -435,7 +441,7 @@ static void diagnostics_task(void *pvParameters) {
             struct in_addr *addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
             char ip_str[16];
             inet_ntoa_r(*addr, ip_str, sizeof(ip_str));
-            ESP_LOGI(TAG, "Resolved google.it to %s. Verifying reachability...", ip_str);
+            ESP_LOGI(TAG, "Resolved %s to %s. Verifying reachability...", target_host, ip_str);
 
             // Costruisce la struttura ip_addr_t passandogli l'IP binario appena risolto
             ip_addr_t dns_target_ip;
@@ -446,11 +452,11 @@ static void diagnostics_task(void *pvParameters) {
             if (perform_ping(&dns_target_ip)) {
                 dns_success = true;
             } else {
-                ESP_LOGE(TAG, "Ping to resolved google.it IP address failed.");
+                ESP_LOGE(TAG, "Ping to resolved %s IP address failed.", target_host);
             }
             freeaddrinfo(res); // Libera la memoria allocata internamente da getaddrinfo
         } else {
-            ESP_LOGE(TAG, "DNS resolution of google.it failed with code: %d", err);
+            ESP_LOGE(TAG, "DNS resolution of %s failed with code: %d", target_host, err);
         }
 
         if (!dns_success) {
@@ -459,7 +465,6 @@ static void diagnostics_task(void *pvParameters) {
         } else {
             ESP_LOGI(TAG, "DNS Check PASSED. Network is fully operational.");
         }
-
         // Calcolo dell'attesa finale a fine ciclo, tenendo conto del tempo impiegato per i tre controlli
         TickType_t elapsed = xTaskGetTickCount() - cycle_start;
         int32_t delay_ms = 10000 - (elapsed * portTICK_PERIOD_MS);
