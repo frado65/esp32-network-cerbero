@@ -22,6 +22,10 @@
 // Componenti custom/di sistema del tuo template
 #include "system_utils.h"
 #include "sdkconfig.h"
+#include "driver/ledc.h" // Usato per il buzzer.
+
+// Definizione del pin del Buzzer
+#define BUZZER_PIN 3
 
 // Tag utilizzato per filtrare i log sulla seriale
 static const char *TAG = "main";
@@ -34,22 +38,60 @@ typedef struct {
     uint32_t period_on_ms;  // Tempo di accensione in millisecondi
     uint32_t period_off_ms; // Tempo di spegnimento in millisecondi
     uint32_t duration_ms;   // Durata totale dell'animazione
+    bool enable_buzzer;     // Abilita/disabilita il buzzer
 } led_blink_cmd_t;
 
 // Handle per la coda di messaggi usata per comunicare con il task del LED
 static QueueHandle_t led_cmd_queue = NULL;
 
 // Funzione helper per inviare un nuovo comando di lampeggio al task del LED
-void led_blink_start(uint32_t period_on_ms, uint32_t period_off_ms, uint32_t duration_ms) {
+void led_blink_start(uint32_t period_on_ms, uint32_t period_off_ms, uint32_t duration_ms, bool use_buzzer) {
     led_blink_cmd_t cmd = {
         .period_on_ms = period_on_ms,
         .period_off_ms = period_off_ms,
-        .duration_ms = duration_ms
+        .duration_ms = duration_ms,
+        .enable_buzzer = use_buzzer
     };
     // xQueueOverwrite sovrascrive l'ultimo messaggio se la coda è piena (in questo caso è di 1 solo elemento).
     // Questo permette di interrompere un lampeggio in corso con uno nuovo senza blocchi.
     if (led_cmd_queue != NULL) {
         xQueueOverwrite(led_cmd_queue, &cmd);
+    }
+}
+
+void buzzer_init(void) {
+    // 1. Configura il timer PWM
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode       = LEDC_LOW_SPEED_MODE,
+        .timer_num        = LEDC_TIMER_0,
+        .duty_resolution  = LEDC_TIMER_13_BIT, // Risoluzione a 13 bit (valori da 0 a 8191)
+        .freq_hz          = 4150,              // Frequenza dell'onda quadra (2 kHz)
+        .clk_cfg          = LEDC_AUTO_CLK
+    };
+    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+    // 2. Collega il timer al pin del buzzer
+    ledc_channel_config_t ledc_channel = {
+        .speed_mode     = LEDC_LOW_SPEED_MODE,
+        .channel        = LEDC_CHANNEL_0,
+        .timer_sel      = LEDC_TIMER_0,
+        .intr_type      = LEDC_INTR_DISABLE,
+        .gpio_num       = BUZZER_PIN,
+        .duty           = 0, // Parte con duty cycle a 0 (spento)
+        .hpoint         = 0
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+}
+
+void buzzer_set_state(bool on) {
+    if (on) {
+        // Accende il suono: duty cycle al 50% di 8192 = 4096
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 4096);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    } else {
+        // Spegne il suono: duty cycle allo 0%
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
     }
 }
 
@@ -69,8 +111,12 @@ static void led_blink_task(void *pvParameters) {
     };
     ESP_ERROR_CHECK(gpio_config(&io_conf)); // Applica la configurazione e blocca in caso di errore
 
+    // Inizializza il generatore PWM per il buzzer
+    buzzer_init();
+
     // Stato di riposo iniziale: LED SPENTO. Logica Active-Low: 1 = spento.
     gpio_set_level(DIAG_LED_PIN, 1);
+    buzzer_set_state(false);
 
     while (1) {
         led_blink_cmd_t new_cmd;
@@ -86,8 +132,10 @@ static void led_blink_task(void *pvParameters) {
             
             if (is_blinking) {
                 gpio_set_level(DIAG_LED_PIN, 0); // Inizia accendendo il LED (LOW = 0)
+                buzzer_set_state(current_cmd.enable_buzzer); // BUZZER ON SE RICHIESTO
             } else {
                 gpio_set_level(DIAG_LED_PIN, 1); // Spegni il LED (HIGH = 1)
+                buzzer_set_state(false);         // BUZZER OFF
             }
         }
 
@@ -99,6 +147,7 @@ static void led_blink_task(void *pvParameters) {
             if (elapsed_ms >= current_cmd.duration_ms) {
                 // Il tempo totale (es. 5 secondi di errore) è scaduto: forza lo spegnimento
                 gpio_set_level(DIAG_LED_PIN, 1);
+                buzzer_set_state(false);         // BUZZER OFF
                 is_blinking = false;
             } else {
                 // Calcola in che fase del ciclo ON/OFF ci troviamo usando l'operatore modulo
@@ -107,8 +156,10 @@ static void led_blink_task(void *pvParameters) {
                     uint32_t phase = elapsed_ms % period;
                     if (phase < current_cmd.period_on_ms) {
                         gpio_set_level(DIAG_LED_PIN, 0); // Fase ON (LOW)
+                        buzzer_set_state(current_cmd.enable_buzzer); // BUZZER ON SE RICHIESTO
                     } else {
                         gpio_set_level(DIAG_LED_PIN, 1); // Fase OFF (HIGH)
+                        buzzer_set_state(false);         // BUZZER OFF
                     }
                 }
                 // Rilascia la CPU per 10ms ad altri task prima di ricalcolare la fase
@@ -259,7 +310,7 @@ static void diagnostics_task(void *pvParameters) {
         // 1. Lampeggio iniziale di notifica per segnalare l'inizio del test (invia comando alla coda)
         ESP_LOGI(TAG, "--------------------------------------------------");
         ESP_LOGI(TAG, "Starting sequential diagnostics check...");
-        led_blink_start(200, 200, 400); 
+        led_blink_start(200, 200, 400, false); 
         vTaskDelay(pdMS_TO_TICKS(400)); // Aspetta che il lampeggio singolo finisca
 
         // 2. Controllo LAN: Risoluzione IP router da stringa a formato binario (ip4addr_aton)
@@ -270,7 +321,7 @@ static void diagnostics_task(void *pvParameters) {
         ESP_LOGI(TAG, "Check 1/3: LAN - Pinging router at 192.168.202.111...");
         if (!perform_ping(&router_ip)) { // Chiama il wrapper sincrono creato sopra
             ESP_LOGE(TAG, "LAN Check FAILED!");
-            led_blink_start(100, 100, 5000); // Comando di lampeggio veloce
+            led_blink_start(100, 100, 5000, false); // Comando di lampeggio veloce
             
             // Gestione precisa del timing: calcola quanto tempo è passato dall'inizio del loop
             // e dormi solo per i millisecondi rimanenti a raggiungere i 10 secondi (10000ms).
@@ -290,7 +341,7 @@ static void diagnostics_task(void *pvParameters) {
         ESP_LOGI(TAG, "Check 2/3: WAN - Pinging DNS at 8.8.8.8...");
         if (!perform_ping(&wan_ip)) {
             ESP_LOGE(TAG, "WAN Check FAILED!");
-            led_blink_start(200, 200, 5000); // Comando di lampeggio medio
+            led_blink_start(200, 200, 5000, true); // Comando di lampeggio medio
             
             // Calcolo compensato dell'attesa
             TickType_t elapsed = xTaskGetTickCount() - cycle_start;
@@ -337,7 +388,7 @@ static void diagnostics_task(void *pvParameters) {
 
         if (!dns_success) {
             ESP_LOGE(TAG, "DNS Check FAILED!");
-            led_blink_start(500, 500, 5000); // Comando di lampeggio lento
+            led_blink_start(500, 500, 5000, true); // Comando di lampeggio lento
         } else {
             ESP_LOGI(TAG, "DNS Check PASSED. Network is fully operational.");
         }
