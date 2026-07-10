@@ -295,6 +295,20 @@ bool perform_ping(const ip_addr_t *target_ip) {
     return ctx.success; // Ritorna l'esito reale popolato dalle callback
 }
 
+bool get_router_ip(ip_addr_t *target_ip) {
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif != NULL) {
+        esp_netif_ip_info_t ip_info;
+        // Controlla che la lettura vada a buon fine e che il gateway non sia vuoto
+        if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK && ip_info.gw.addr != 0) {
+            target_ip->type = IPADDR_TYPE_V4;
+            target_ip->u_addr.ip4.addr = ip_info.gw.addr;
+            return true;
+        }
+    }
+    return false; // Gateway non ancora assegnato o rete giù
+}
+
 // Task principale che esegue la diagnostica ciclica ogni 10 secondi
 static void diagnostics_task(void *pvParameters) {
     ESP_LOGI(TAG, "Network diagnostics task started. Waiting for WiFi connection...");
@@ -315,10 +329,22 @@ static void diagnostics_task(void *pvParameters) {
 
         // 2. Controllo LAN: Risoluzione IP router da stringa a formato binario (ip4addr_aton)
         ip_addr_t router_ip;
-        ip4addr_aton("192.168.202.111", &router_ip.u_addr.ip4);
-        router_ip.type = IPADDR_TYPE_V4;
 
-        ESP_LOGI(TAG, "Check 1/3: LAN - Pinging router at 192.168.202.111...");
+        // Tenta di recuperare dinamicamente l'IP del gateway
+        if (!get_router_ip(&router_ip)) {
+            ESP_LOGE(TAG, "LAN Check FAILED: Impossibile determinare l'IP del router!");
+            led_blink_start(100, 100, 5000, false); // Allarme veloce (o con parametro del buzzer se preferisci)
+            
+            TickType_t elapsed = xTaskGetTickCount() - cycle_start;
+            int32_t delay_ms = 10000 - (elapsed * portTICK_PERIOD_MS);
+            if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
+            
+            continue; // Interrompe l'iterazione e riparte
+        }
+
+        // Ora che abbiamo l'IP, lo stampiamo e facciamo il ping
+        ESP_LOGI(TAG, "Check 1/3: LAN - Pinging router at " IPSTR "...", IP2STR(&router_ip.u_addr.ip4));
+        
         if (!perform_ping(&router_ip)) { // Chiama il wrapper sincrono creato sopra
             ESP_LOGE(TAG, "LAN Check FAILED!");
             led_blink_start(100, 100, 5000, false); // Comando di lampeggio veloce
