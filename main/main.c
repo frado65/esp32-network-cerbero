@@ -23,6 +23,15 @@
 #include "system_utils.h"
 #include "sdkconfig.h"
 #include "driver/ledc.h" // Usato per il buzzer.
+#include "param_persist.h"
+#include "params_http.h"
+
+
+#define AP_SSID "ESP32_Network-Cerbero"
+#define AP_PASS "netcer1357"
+
+// Variabile globale che conterrà i parametri di rete
+app_config_t device_config;
 
 // Definizione del pin del Buzzer
 #define BUZZER_PIN 3
@@ -209,19 +218,54 @@ void wifi_init_sta(void) {
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, &instance_any_id));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &instance_got_ip));
 
-    // Imposta SSID e Password recuperati dal menuconfig
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = CONFIG_WIFI_SSID,
-            .password = CONFIG_WIFI_PASSWORD,
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK, // Livello di sicurezza minimo accettato
-        },
-    };
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA)); // Modalità Client (non Access Point)
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start()); // Avvia il driver Wi-Fi
 
-    ESP_LOGI(TAG, "WiFi station initialization completed.");
+    if (strlen(device_config.wifi_ssid) == 0) {
+        ESP_LOGW(TAG, "Nessun SSID configurato. Avvio in modalita' Access Point.");
+        
+        // 1. Crea l'interfaccia di rete virtuale per l'Access Point
+        esp_netif_create_default_wifi_ap();
+
+        // 2. Configura i parametri della rete Wi-Fi che l'ESP32 andrà a creare
+        wifi_config_t ap_config = {
+            .ap = {
+                .ssid = AP_SSID, //"ESP32_Config"  // Il nome della rete a cui ti collegherai
+                .ssid_len = strlen(AP_SSID),
+                .channel = 1,
+                .password = AP_PASS,               // La password per collegarsi
+                .max_connection = 4,
+                .authmode = WIFI_AUTH_WPA2_PSK
+            },
+        };
+
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+        ESP_ERROR_CHECK(esp_wifi_start());
+        
+        // Avvia il server web per permettere la configurazione
+        start_webserver();
+        ESP_LOGI(TAG, "Access Point avviato. Collegati a 'ESP32_Config' e apri 192.168.4.1");
+    } else {
+
+        // Imposta SSID e Password recuperati dal menuconfig
+        wifi_config_t wifi_config = {
+            .sta = {
+                .ssid = CONFIG_WIFI_SSID,
+                .password = CONFIG_WIFI_PASSWORD,
+                .threshold.authmode = WIFI_AUTH_WPA2_PSK, // Livello di sicurezza minimo accettato
+            },
+        };
+        // Copia sicura dei dati dalla struct alla configurazione Wi-Fi
+        strncpy((char *)wifi_config.sta.ssid, device_config.wifi_ssid, sizeof(wifi_config.sta.ssid));
+        strncpy((char *)wifi_config.sta.password, device_config.wifi_password, sizeof(wifi_config.sta.password));        
+
+        //TODO: rimuovere le costanti WIFI_MODE_STA e WIFI_IF_STA!
+        //ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA)); // Modalità Client (non Access Point)
+        //ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+
+        ESP_ERROR_CHECK(esp_wifi_start()); // Avvia il driver Wi-Fi
+
+        ESP_LOGI(TAG, "WiFi station initialization completed.");
+    }
 }
 
 // Struttura dati per incapsulare lo stato di un ping asincrono
@@ -431,6 +475,12 @@ static void diagnostics_task(void *pvParameters) {
 // Entry point standard di ESP-IDF (su FreeRTOS corrisponde ad un task generato internamente all'avvio)
 void app_main(void) {
     ESP_LOGI(TAG, "Starting sequential diagnostics on ESP32-C3...");
+
+    // 1. Inizializza il file system NVS
+    ESP_ERROR_CHECK(config_nvs_init());
+
+    // 2. Carica la configurazione dalla memoria Flash
+    config_load(&device_config);
 
     // Inizializza la NVS (Non-Volatile Storage) richiesta dal driver Wi-Fi per salvare log e credenziali
     esp_err_t ret = nvs_flash_init();
