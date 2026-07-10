@@ -1,264 +1,288 @@
 #include <stdio.h>
 #include <string.h>
+// Librerie core di FreeRTOS per la gestione di task, code, semafori ed eventi
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/event_groups.h"
+// Librerie specifiche ESP-IDF per l'hardware e il networking
 #include "driver/gpio.h"
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+// Librerie lwIP (Lightweight IP) per lo stack di rete TCP/IP e DNS
 #include "lwip/err.h"
 #include "lwip/sys.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
 #include "ping/ping_sock.h"
+// Componenti custom/di sistema del tuo template
 #include "system_utils.h"
 #include "sdkconfig.h"
 
+// Tag utilizzato per filtrare i log sulla seriale
 static const char *TAG = "main";
 
+// Definizione del pin del LED, recuperato dalla configurazione del progetto (menuconfig)
 #define DIAG_LED_PIN CONFIG_BLINK_GPIO_PIN
 
-// LED command structure
+// Struttura dati che definisce il "comando" di lampeggio
 typedef struct {
-    uint32_t period_on_ms;
-    uint32_t period_off_ms;
-    uint32_t duration_ms;
+    uint32_t period_on_ms;  // Tempo di accensione in millisecondi
+    uint32_t period_off_ms; // Tempo di spegnimento in millisecondi
+    uint32_t duration_ms;   // Durata totale dell'animazione
 } led_blink_cmd_t;
 
+// Handle per la coda di messaggi usata per comunicare con il task del LED
 static QueueHandle_t led_cmd_queue = NULL;
 
-// Function to trigger a specific LED pattern
+// Funzione helper per inviare un nuovo comando di lampeggio al task del LED
 void led_blink_start(uint32_t period_on_ms, uint32_t period_off_ms, uint32_t duration_ms) {
     led_blink_cmd_t cmd = {
         .period_on_ms = period_on_ms,
         .period_off_ms = period_off_ms,
         .duration_ms = duration_ms
     };
+    // xQueueOverwrite sovrascrive l'ultimo messaggio se la coda è piena (in questo caso è di 1 solo elemento).
+    // Questo permette di interrompere un lampeggio in corso con uno nuovo senza blocchi.
     if (led_cmd_queue != NULL) {
         xQueueOverwrite(led_cmd_queue, &cmd);
     }
 }
 
-// LED Blink Task: manages active-low blinking durations non-blockingly
+// Task FreeRTOS indipendente che gestisce il lampeggio del LED senza bloccare il resto del codice
 static void led_blink_task(void *pvParameters) {
-    led_blink_cmd_t current_cmd = {0};
+    led_blink_cmd_t current_cmd = {0}; // inizializza tutti i campi a zero.
     bool is_blinking = false;
-    TickType_t start_tick = 0;
+    TickType_t start_tick = 0; // Memorizza i tick di sistema all'inizio del lampeggio
 
-    // Configure GPIO pin
+    // Configurazione del registro hardware del GPIO per il LED
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << DIAG_LED_PIN),
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pin_bit_mask = (1ULL << DIAG_LED_PIN), // Seleziona il pin
+        .mode = GPIO_MODE_OUTPUT,               // Imposta come output
+        .pull_up_en = GPIO_PULLUP_DISABLE,      // Niente resistenze di pull interne
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,         // Nessun interrupt abilitato
     };
-    ESP_ERROR_CHECK(gpio_config(&io_conf));
+    ESP_ERROR_CHECK(gpio_config(&io_conf)); // Applica la configurazione e blocca in caso di errore
 
-    // Initial state: OFF (Active-Low = HIGH)
+    // Stato di riposo iniziale: LED SPENTO. Logica Active-Low: 1 = spento.
     gpio_set_level(DIAG_LED_PIN, 1);
 
     while (1) {
         led_blink_cmd_t new_cmd;
-        // Wait on the queue. If blinking, don't block so we can continue the blink cycle.
+        // Se non stiamo lampeggiando, blocca il task all'infinito (portMAX_DELAY) in attesa di un comando.
+        // Se stiamo lampeggiando, non bloccare (0) così possiamo continuare l'animazione.
         TickType_t wait_ticks = is_blinking ? 0 : portMAX_DELAY;
 
+        // Controlla se è arrivato un nuovo comando nella coda
         if (xQueueReceive(led_cmd_queue, &new_cmd, wait_ticks) == pdPASS) {
             current_cmd = new_cmd;
             is_blinking = (current_cmd.duration_ms > 0);
-            start_tick = xTaskGetTickCount();
+            start_tick = xTaskGetTickCount(); // Salva il momento di inizio comando
+            
             if (is_blinking) {
-                gpio_set_level(DIAG_LED_PIN, 0); // Start with LED ON (LOW)
+                gpio_set_level(DIAG_LED_PIN, 0); // Inizia accendendo il LED (LOW = 0)
             } else {
-                gpio_set_level(DIAG_LED_PIN, 1); // LED OFF (HIGH)
+                gpio_set_level(DIAG_LED_PIN, 1); // Spegni il LED (HIGH = 1)
             }
         }
 
+        // Macchina a stati per gestire l'animazione del lampeggio
         if (is_blinking) {
+            // Calcola da quanti millisecondi sta andando avanti questo comando
             uint32_t elapsed_ms = (xTaskGetTickCount() - start_tick) * portTICK_PERIOD_MS;
+            
             if (elapsed_ms >= current_cmd.duration_ms) {
-                // Duration expired, reset to resting state (OFF = HIGH)
+                // Il tempo totale (es. 5 secondi di errore) è scaduto: forza lo spegnimento
                 gpio_set_level(DIAG_LED_PIN, 1);
                 is_blinking = false;
             } else {
+                // Calcola in che fase del ciclo ON/OFF ci troviamo usando l'operatore modulo
                 uint32_t period = current_cmd.period_on_ms + current_cmd.period_off_ms;
                 if (period > 0) {
                     uint32_t phase = elapsed_ms % period;
                     if (phase < current_cmd.period_on_ms) {
-                        gpio_set_level(DIAG_LED_PIN, 0); // LED ON (LOW)
+                        gpio_set_level(DIAG_LED_PIN, 0); // Fase ON (LOW)
                     } else {
-                        gpio_set_level(DIAG_LED_PIN, 1); // LED OFF (HIGH)
+                        gpio_set_level(DIAG_LED_PIN, 1); // Fase OFF (HIGH)
                     }
                 }
-                vTaskDelay(pdMS_TO_TICKS(10)); // Check phase every 10ms
+                // Rilascia la CPU per 10ms ad altri task prima di ricalcolare la fase
+                vTaskDelay(pdMS_TO_TICKS(10)); 
             }
         }
     }
 }
 
-// Wi-Fi Configuration and Event Group
+// Strutture per la gestione degli eventi Wi-Fi
 static EventGroupHandle_t wifi_event_group;
-#define WIFI_CONNECTED_BIT BIT0
+#define WIFI_CONNECTED_BIT BIT0 // Bit flag usato per segnalare l'avvenuta connessione
 
-static void wifi_event_handler(void* arg, esp_event_base_t event_base,
-                                int32_t event_id, void* event_data) {
+// Callback invocata in background da ESP-IDF quando cambia lo stato del Wi-Fi o dell'IP
+static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         ESP_LOGI(TAG, "WiFi station started. Connecting...");
-        esp_wifi_connect();
+        esp_wifi_connect(); // Avvia la connessione all'Access Point
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGW(TAG, "WiFi disconnected. Retrying connection...");
+        // Azzera il bit di connessione nel gruppo eventi
         xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
-        esp_wifi_connect();
+        esp_wifi_connect(); // Riprova a connettersi in automatico
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        // Quando il DHCP assegna l'IP, estrae l'indirizzo dalla struttura dati e lo logga
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "WiFi connected! IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        // Imposta il bit per sbloccare il task di diagnostica in attesa
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
 
+// Funzione di setup dello stack di rete e della periferica Wi-Fi
 void wifi_init_sta(void) {
-    wifi_event_group = xEventGroupCreate();
+    wifi_event_group = xEventGroupCreate(); // Crea il gruppo eventi per la sincronizzazione
 
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
+    ESP_ERROR_CHECK(esp_netif_init()); // Inizializza lo stack TCP/IP lwIP
+    ESP_ERROR_CHECK(esp_event_loop_create_default()); // Crea il loop per gestire gli eventi di sistema
+    esp_netif_create_default_wifi_sta(); // Crea l'interfaccia di rete virtuale per la Station (client)
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
+    // Registra la funzione handler per ascoltare gli eventi Wi-Fi e IP
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &wifi_event_handler,
-                                                        NULL,
-                                                        &instance_any_id));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-                                                        &wifi_event_handler,
-                                                        NULL,
-                                                        &instance_got_ip));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, &instance_any_id));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &instance_got_ip));
 
+    // Imposta SSID e Password recuperati dal menuconfig
     wifi_config_t wifi_config = {
         .sta = {
             .ssid = CONFIG_WIFI_SSID,
             .password = CONFIG_WIFI_PASSWORD,
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+            .threshold.authmode = WIFI_AUTH_WPA2_PSK, // Livello di sicurezza minimo accettato
         },
     };
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA)); // Modalità Client (non Access Point)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(esp_wifi_start()); // Avvia il driver Wi-Fi
 
     ESP_LOGI(TAG, "WiFi station initialization completed.");
 }
 
-// Ping Context and Callbacks
+// Struttura dati per incapsulare lo stato di un ping asincrono
 typedef struct {
-    SemaphoreHandle_t sem;
-    bool success;
+    SemaphoreHandle_t sem; // Semaforo usato per bloccare l'esecuzione in attesa dell'esito
+    bool success;          // Flag di esito del ping
 } ping_ctx_t;
 
+// Callback asincrona chiamata dallo stack lwIP se arriva il pacchetto ICMP di risposta (ECHO REPLY)
 static void cmd_ping_on_ping_success(esp_ping_handle_t hdl, void *args) {
     ping_ctx_t *ctx = (ping_ctx_t *)args;
     ctx->success = true;
 }
 
+// Callback asincrona chiamata se il ping va in timeout
 static void cmd_ping_on_ping_timeout(esp_ping_handle_t hdl, void *args) {
-    // Keep ctx->success false
+    // Non facciamo nulla, success rimane false
 }
 
+// Callback asincrona chiamata quando la sessione di ping è formalmente conclusa
 static void cmd_ping_on_ping_end(esp_ping_handle_t hdl, void *args) {
     ping_ctx_t *ctx = (ping_ctx_t *)args;
-    xSemaphoreGive(ctx->sem);
+    xSemaphoreGive(ctx->sem); // Sblocca il semaforo, risvegliando la funzione chiamante
 }
 
-// Helper function to perform a single ping
+// Funzione wrapper per eseguire un ping e attendere il risultato in modo sincrono
 bool perform_ping(const ip_addr_t *target_ip) {
+    // Crea un contesto contenente un semaforo binario per trasformare 
+    // l'API asincrona del ping in una chiamata sincrona
     ping_ctx_t ctx = {
         .sem = xSemaphoreCreateBinary(),
         .success = false
     };
-    if (!ctx.sem) {
-        return false;
-    }
+    if (!ctx.sem) return false;
 
+    // Configura i parametri del ping (inviamo 1 solo pacchetto con timeout di 1 secondo)
     esp_ping_config_t ping_config = ESP_PING_DEFAULT_CONFIG();
     ping_config.target_addr = *target_ip;
     ping_config.count = 1;
-    ping_config.timeout_ms = 1000; // 1 second timeout
+    ping_config.timeout_ms = 1000; 
 
+    // Collega le funzioni di callback
     esp_ping_callbacks_t cbs = {
         .on_ping_success = cmd_ping_on_ping_success,
         .on_ping_timeout = cmd_ping_on_ping_timeout,
         .on_ping_end = cmd_ping_on_ping_end,
-        .cb_args = &ctx
+        .cb_args = &ctx // Passiamo il nostro contesto (con il semaforo) alle callback
     };
 
     esp_ping_handle_t ping_handle;
+    // Crea la sessione di rete per il ping
     esp_err_t err = esp_ping_new_session(&ping_config, &cbs, &ping_handle);
     if (err != ESP_OK) {
         vSemaphoreDelete(ctx.sem);
         return false;
     }
 
-    esp_ping_start(ping_handle);
+    esp_ping_start(ping_handle); // Lancia la richiesta ICMP in background
 
-    // Wait for the ping session to complete
+    // Il task si blocca qui in attesa che la callback chiami xSemaphoreGive.
+    // Timeout di sicurezza di 1200ms (poco più del timeout del ping stesso) per evitare blocchi definitivi.
     if (xSemaphoreTake(ctx.sem, pdMS_TO_TICKS(1200)) != pdTRUE) {
         ESP_LOGE(TAG, "Ping semaphore take timeout");
     }
 
+    // Pulizia delle risorse di rete e FreeRTOS
     esp_ping_stop(ping_handle);
     esp_ping_delete_session(ping_handle);
     vSemaphoreDelete(ctx.sem);
 
-    return ctx.success;
+    return ctx.success; // Ritorna l'esito reale popolato dalle callback
 }
 
-// Diagnostics Task: runs sequentially every 10 seconds
+// Task principale che esegue la diagnostica ciclica ogni 10 secondi
 static void diagnostics_task(void *pvParameters) {
     ESP_LOGI(TAG, "Network diagnostics task started. Waiting for WiFi connection...");
     
-    // Wait until the device gets connected to the WiFi AP initially
+    // Ferma l'esecuzione di questo task finché la callback del Wi-Fi non imposta il bit WIFI_CONNECTED_BIT
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
     ESP_LOGI(TAG, "WiFi connected. Starting periodic network checks.");
 
     while (1) {
+        // Registra il tick di inizio ciclo per calcolare correttamente l'attesa dei 10 secondi finali
         TickType_t cycle_start = xTaskGetTickCount();
 
-        // 1. Confirm test: Single flash (200ms ON / 200ms OFF)
+        // 1. Lampeggio iniziale di notifica per segnalare l'inizio del test (invia comando alla coda)
         ESP_LOGI(TAG, "--------------------------------------------------");
         ESP_LOGI(TAG, "Starting sequential diagnostics check...");
-        led_blink_start(200, 200, 400);
-        vTaskDelay(pdMS_TO_TICKS(400)); // wait for single flash to finish
+        led_blink_start(200, 200, 400); 
+        vTaskDelay(pdMS_TO_TICKS(400)); // Aspetta che il lampeggio singolo finisca
 
-        // 2. Check LAN (Router): Ping 192.168.202.111
+        // 2. Controllo LAN: Risoluzione IP router da stringa a formato binario (ip4addr_aton)
         ip_addr_t router_ip;
         ip4addr_aton("192.168.202.111", &router_ip.u_addr.ip4);
         router_ip.type = IPADDR_TYPE_V4;
 
         ESP_LOGI(TAG, "Check 1/3: LAN - Pinging router at 192.168.202.111...");
-        if (!perform_ping(&router_ip)) {
+        if (!perform_ping(&router_ip)) { // Chiama il wrapper sincrono creato sopra
             ESP_LOGE(TAG, "LAN Check FAILED!");
-            led_blink_start(100, 100, 5000); // Fast blink (100ms ON / 100ms OFF) for 5 seconds
+            led_blink_start(100, 100, 5000); // Comando di lampeggio veloce
             
-            // Calculate delay for next cycle
+            // Gestione precisa del timing: calcola quanto tempo è passato dall'inizio del loop
+            // e dormi solo per i millisecondi rimanenti a raggiungere i 10 secondi (10000ms).
             TickType_t elapsed = xTaskGetTickCount() - cycle_start;
             int32_t delay_ms = 10000 - (elapsed * portTICK_PERIOD_MS);
-            if (delay_ms > 0) {
-                vTaskDelay(pdMS_TO_TICKS(delay_ms));
-            }
-            continue;
+            if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
+            
+            continue; // Interrompe l'iterazione attuale e riparte dall'inizio del while(1)
         }
         ESP_LOGI(TAG, "LAN Check PASSED.");
 
-        // 3. Check WAN (Routing): Ping 8.8.8.8
+        // 3. Controllo WAN: Stessa logica del controllo LAN, ma punta all'8.8.8.8
         ip_addr_t wan_ip;
         ip4addr_aton("8.8.8.8", &wan_ip.u_addr.ip4);
         wan_ip.type = IPADDR_TYPE_V4;
@@ -266,90 +290,98 @@ static void diagnostics_task(void *pvParameters) {
         ESP_LOGI(TAG, "Check 2/3: WAN - Pinging DNS at 8.8.8.8...");
         if (!perform_ping(&wan_ip)) {
             ESP_LOGE(TAG, "WAN Check FAILED!");
-            led_blink_start(200, 200, 5000); // Medium blink (200ms ON / 200ms OFF) for 5 seconds
+            led_blink_start(200, 200, 5000); // Comando di lampeggio medio
             
+            // Calcolo compensato dell'attesa
             TickType_t elapsed = xTaskGetTickCount() - cycle_start;
             int32_t delay_ms = 10000 - (elapsed * portTICK_PERIOD_MS);
-            if (delay_ms > 0) {
-                vTaskDelay(pdMS_TO_TICKS(delay_ms));
-            }
-            continue;
+            if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
+            continue; // Torna su
         }
         ESP_LOGI(TAG, "WAN Check PASSED.");
 
-        // 4. Check DNS: resolve and check reachability of google.it
+        // 4. Controllo DNS: Risolve l'hostname
         ESP_LOGI(TAG, "Check 3/3: DNS - Resolving name google.it...");
         struct addrinfo hints = {
-            .ai_family = AF_INET,
-            .ai_socktype = SOCK_STREAM,
+            .ai_family = AF_INET,       // Forza la ricerca di un IPv4
+            .ai_socktype = SOCK_STREAM, // Tipo di socket (ininfluente per la sola risoluzione)
         };
         struct addrinfo *res = NULL;
+        // Chiamata all'API POSIX di lwIP per convertire l'URL nell'IP binario.
+        // È bloccante, interroga il server DNS configurato sul router (ricevuto via DHCP)
         int err = getaddrinfo("google.it", NULL, &hints, &res);
         bool dns_success = false;
 
         if (err == 0 && res != NULL) {
+            // Estrae l'indirizzo IPv4 dalla struttura e lo converte in stringa per stamparlo
             struct in_addr *addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
             char ip_str[16];
             inet_ntoa_r(*addr, ip_str, sizeof(ip_str));
             ESP_LOGI(TAG, "Resolved google.it to %s. Verifying reachability...", ip_str);
 
+            // Costruisce la struttura ip_addr_t passandogli l'IP binario appena risolto
             ip_addr_t dns_target_ip;
             dns_target_ip.type = IPADDR_TYPE_V4;
             dns_target_ip.u_addr.ip4.addr = addr->s_addr;
 
+            // Fila finale: pinge l'IP appena ottenuto dal server DNS
             if (perform_ping(&dns_target_ip)) {
                 dns_success = true;
             } else {
                 ESP_LOGE(TAG, "Ping to resolved google.it IP address failed.");
             }
-            freeaddrinfo(res);
+            freeaddrinfo(res); // Libera la memoria allocata internamente da getaddrinfo
         } else {
             ESP_LOGE(TAG, "DNS resolution of google.it failed with code: %d", err);
         }
 
         if (!dns_success) {
             ESP_LOGE(TAG, "DNS Check FAILED!");
-            led_blink_start(500, 500, 5000); // Slow blink (500ms ON / 500ms OFF) for 5 seconds
+            led_blink_start(500, 500, 5000); // Comando di lampeggio lento
         } else {
             ESP_LOGI(TAG, "DNS Check PASSED. Network is fully operational.");
         }
 
-        // Wait until the end of the 10-second cycle
+        // Calcolo dell'attesa finale a fine ciclo, tenendo conto del tempo impiegato per i tre controlli
         TickType_t elapsed = xTaskGetTickCount() - cycle_start;
         int32_t delay_ms = 10000 - (elapsed * portTICK_PERIOD_MS);
         if (delay_ms > 0) {
-            vTaskDelay(pdMS_TO_TICKS(delay_ms));
+            vTaskDelay(pdMS_TO_TICKS(delay_ms)); // Restante parte dei 10 secondi
         }
     }
 }
 
+// Entry point standard di ESP-IDF (su FreeRTOS corrisponde ad un task generato internamente all'avvio)
 void app_main(void) {
     ESP_LOGI(TAG, "Starting sequential diagnostics on ESP32-C3...");
 
-    // Initialize NVS (Non-Volatile Storage)
+    // Inizializza la NVS (Non-Volatile Storage) richiesta dal driver Wi-Fi per salvare log e credenziali
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
+        ESP_ERROR_CHECK(nvs_flash_erase()); // Se corrotta, piallala e ricreala
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
 
-    // Initialize system_utils component
+    // Richiama il setup custom presente nel tuo template (system_utils.c)
     system_utils_init();
 
-    // Create the LED control command queue
+    // Crea la coda IPC (Inter-Process Communication) che permette ai task di parlarsi.
+    // Dimensione: 1 solo elemento della grandezza della struct led_blink_cmd_t.
     led_cmd_queue = xQueueCreate(1, sizeof(led_blink_cmd_t));
     if (led_cmd_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create LED command queue.");
         return;
     }
 
-    // Spawn non-blocking LED management task
+    // Istanzia il task per il LED sul Core 0 (l'ESP32-C3 ha un solo core, quindi andrà sempre sullo 0).
+    // Stack: 3072 bytes. Priorità: 5 (alta, per non fargli saltare il timing dei lampeggi)
     xTaskCreatePinnedToCore(led_blink_task, "led_blink_task", 3072, NULL, 5, NULL, 0);
 
-    // Initialize Wi-Fi
+    // Esegue il setup iniziale del Wi-Fi e avvia la connessione
     wifi_init_sta();
 
-    // Spawn diagnostics task
+    // Istanzia il task per la diagnostica di rete. 
+    // Stack: 4096 bytes (il networking necessita di più RAM). Priorità: 4 (leggermente inferiore al LED)
     xTaskCreatePinnedToCore(diagnostics_task, "diagnostics_task", 4096, NULL, 4, NULL, 0);
 }
