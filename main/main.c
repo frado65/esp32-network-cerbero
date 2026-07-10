@@ -201,37 +201,33 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
     }
 }
 
-// Funzione di setup dello stack di rete e della periferica Wi-Fi
 void wifi_init_sta(void) {
-    wifi_event_group = xEventGroupCreate(); // Crea il gruppo eventi per la sincronizzazione
+    wifi_event_group = xEventGroupCreate();
 
-    ESP_ERROR_CHECK(esp_netif_init()); // Inizializza lo stack TCP/IP lwIP
-    ESP_ERROR_CHECK(esp_event_loop_create_default()); // Crea il loop per gestire gli eventi di sistema
-    esp_netif_create_default_wifi_sta(); // Crea l'interfaccia di rete virtuale per la Station (client)
+    ESP_ERROR_CHECK(esp_netif_init()); 
+    ESP_ERROR_CHECK(esp_event_loop_create_default()); 
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    // Registra la funzione handler per ascoltare gli eventi Wi-Fi e IP
+    // Registra gli handler per gli eventi
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, &instance_any_id));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &instance_got_ip));
 
-
     if (strlen(device_config.wifi_ssid) == 0) {
         ESP_LOGW(TAG, "Nessun SSID configurato. Avvio in modalita' Access Point.");
         
-        // 1. Crea l'interfaccia di rete virtuale per l'Access Point
+        // Interfaccia virtuale dedicata all'AP
         esp_netif_create_default_wifi_ap();
 
-        // 2. Configura i parametri della rete Wi-Fi che l'ESP32 andrà a creare
         wifi_config_t ap_config = {
             .ap = {
-                .ssid = AP_SSID, //"ESP32_Config"  // Il nome della rete a cui ti collegherai
+                .ssid = AP_SSID,
                 .ssid_len = strlen(AP_SSID),
                 .channel = 1,
-                .password = AP_PASS,               // La password per collegarsi
+                .password = AP_PASS,
                 .max_connection = 4,
                 .authmode = WIFI_AUTH_WPA2_PSK
             },
@@ -241,30 +237,31 @@ void wifi_init_sta(void) {
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
         ESP_ERROR_CHECK(esp_wifi_start());
         
-        // Avvia il server web per permettere la configurazione
         start_webserver();
-        ESP_LOGI(TAG, "Access Point avviato. Collegati a 'ESP32_Config' e apri 192.168.4.1");
+        ESP_LOGI(TAG, "Access Point avviato. Collegati a '%s' e apri 192.168.4.1", AP_SSID);
+        
     } else {
+        ESP_LOGI(TAG, "SSID trovato: %s. Avvio in modalita' Station.", device_config.wifi_ssid);
 
-        // Imposta SSID e Password recuperati dal menuconfig
+        // Interfaccia virtuale dedicata alla Station
+        esp_netif_create_default_wifi_sta(); 
+
         wifi_config_t wifi_config = {
             .sta = {
-                .ssid = CONFIG_WIFI_SSID,
-                .password = CONFIG_WIFI_PASSWORD,
-                .threshold.authmode = WIFI_AUTH_WPA2_PSK, // Livello di sicurezza minimo accettato
+                .threshold.authmode = WIFI_AUTH_WPA2_PSK,
             },
         };
-        // Copia sicura dei dati dalla struct alla configurazione Wi-Fi
+        
         strncpy((char *)wifi_config.sta.ssid, device_config.wifi_ssid, sizeof(wifi_config.sta.ssid));
         strncpy((char *)wifi_config.sta.password, device_config.wifi_password, sizeof(wifi_config.sta.password));        
 
-        //TODO: rimuovere le costanti WIFI_MODE_STA e WIFI_IF_STA!
-        //ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA)); // Modalità Client (non Access Point)
-        //ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA)); 
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+        ESP_ERROR_CHECK(esp_wifi_start()); 
+        
+        start_webserver(); 
 
-        ESP_ERROR_CHECK(esp_wifi_start()); // Avvia il driver Wi-Fi
-
-        ESP_LOGI(TAG, "WiFi station initialization completed.");
+        ESP_LOGI(TAG, "WiFi station initialization completed. Tentativo di connessione in corso...");
     }
 }
 
@@ -399,7 +396,7 @@ static void diagnostics_task(void *pvParameters) {
             int32_t delay_ms = 10000 - (elapsed * portTICK_PERIOD_MS);
             if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
             
-            //continue; // Interrompe l'iterazione attuale e riparte dall'inizio del while(1)
+            continue; // Interrompe l'iterazione attuale e riparte dall'inizio del while(1)
         }
         ESP_LOGI(TAG, "LAN Check PASSED.");
 
