@@ -479,14 +479,6 @@ void app_main(void) {
     // 2. Carica la configurazione dalla memoria Flash
     config_load(&device_config);
 
-    // Inizializza la NVS (Non-Volatile Storage) richiesta dal driver Wi-Fi per salvare log e credenziali
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase()); // Se corrotta, piallala e ricreala
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
     // Richiama il setup custom presente nel tuo template (system_utils.c)
     system_utils_init();
 

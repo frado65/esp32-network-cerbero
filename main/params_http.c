@@ -10,8 +10,10 @@
 static const char *TAG = "HTTP_SERVER";
 static httpd_handle_t server = NULL;
 
-// Semplice pagina HTML con un po' di CSS inline per renderla leggibile
-static const char* form_html = 
+extern app_config_t device_config;
+
+// Template HTML: i %s verranno sostituiti a runtime con i valori attuali
+static const char* form_template = 
     "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1.0'>"
     "<title>Impostazioni Rete</title>"
     "<style>body{font-family:Arial,sans-serif;margin:40px;background:#f4f4f9;} "
@@ -21,16 +23,35 @@ static const char* form_html =
     "</head><body>"
     "<h2>Configurazione ESP32</h2>"
     "<form method='POST' action='/submit'>"
-    "<label>SSID WiFi:</label><input type='text' name='ssid' required>"
-    "<label>Password WiFi:</label><input type='password' name='pass'>"
-    "<label>IP Ping (es. 8.8.8.8):</label><input type='text' name='ping_ip' required>"
-    "<label>Host Ping (es. google.com):</label><input type='text' name='ping_host' required>"
+    "<label>SSID WiFi:</label><input type='text' name='ssid' value='%s' required>"
+    "<label>Password WiFi:</label><input type='password' name='pass' value='%s'>"
+    "<label>IP Ping (es. 8.8.8.8):</label><input type='text' name='ping_ip' value='%s' required>"
+    "<label>Host Ping (es. google.com):</label><input type='text' name='ping_host' value='%s' required>"
     "<button type='submit'>Salva e Riavvia</button>"
     "</form></body></html>";
 
-// Handler per la richiesta GET (Mostra la pagina)
+// Handler per la richiesta GET (Mostra la pagina con i dati compilati)
 static esp_err_t form_get_handler(httpd_req_t *req) {
-    httpd_resp_send(req, form_html, HTTPD_RESP_USE_STRLEN);
+    // Alloca 1024 byte per contenere la pagina completa
+    char *resp_str = malloc(1024);
+    if (resp_str == NULL) {
+        ESP_LOGE(TAG, "Impossibile allocare memoria per la pagina HTML");
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    // Inietta i valori attuali nel template HTML
+    snprintf(resp_str, 1024, form_template, 
+             device_config.wifi_ssid, 
+             device_config.wifi_password, 
+             device_config.ping_ip, 
+             device_config.ping_host);
+
+    // Invia la pagina popolata
+    httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
+    
+    // Libera la memoria dinamica
+    free(resp_str);
     return ESP_OK;
 }
 
