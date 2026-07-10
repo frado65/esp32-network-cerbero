@@ -27,7 +27,7 @@
 static const char *TAG = "main";
 
 // Definizione del pin del LED, recuperato dalla configurazione del progetto (menuconfig)
-#define DIAG_LED_PIN CONFIG_BLINK_GPIO_PIN
+#define DIAG_LED_PIN 8 //CONFIG_BLINK_GPIO_PIN = 2!
 
 // Struttura dati che definisce il "comando" di lampeggio
 typedef struct {
@@ -278,7 +278,7 @@ static void diagnostics_task(void *pvParameters) {
             int32_t delay_ms = 10000 - (elapsed * portTICK_PERIOD_MS);
             if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
             
-            continue; // Interrompe l'iterazione attuale e riparte dall'inizio del while(1)
+            //continue; // Interrompe l'iterazione attuale e riparte dall'inizio del while(1)
         }
         ESP_LOGI(TAG, "LAN Check PASSED.");
 
