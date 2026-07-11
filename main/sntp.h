@@ -24,7 +24,7 @@ void initialize_sntp(const char* tag) {
 }
 
 void print_current_time(const char* tag) {
-    time_t now;
+    time_t now; // alla fine è un long int.
     struct tm timeinfo;
     time(&now);
     localtime_r(&now, &timeinfo);
