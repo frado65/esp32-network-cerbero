@@ -5,6 +5,4 @@
 - Prima di modificare codice se ti servono ulteriori informazioni chiedile all'utente, non inventarti specifiche che non ti siano state fornite, nel dubbio chiedi all'utente.
 - Prima di modificare codice valuta se ci sono alternative e proponile all'utente.
 
-# Nuovo requisito aggiungere un button per forzare modalità **Access Point (AP)**.
-Aggiungere la lettura di un button Normalmente aperto, ON a zero sul pin 2, usa il resistore interno di pull UP.
-
+# Nuovo requisito

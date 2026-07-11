@@ -25,6 +25,7 @@
 #include "driver/ledc.h" // Usato per il buzzer.
 #include "param_persist.h"
 #include "params_http.h"
+#include "sntp.h"
 
 
 #define AP_SSID "ESP32_Network-Cerbero"
@@ -200,6 +201,8 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         // Quando il DHCP assegna l'IP, estrae l'indirizzo dalla struttura dati e lo logga
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "WiFi connected! IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        // Inizializza il servizio SNTP:
+        initialize_sntp(TAG);
         // Imposta il bit per sbloccare il task di diagnostica in attesa
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
     }
@@ -419,6 +422,7 @@ static void diagnostics_task(void *pvParameters) {
 
         // 1. Lampeggio iniziale di notifica per segnalare l'inizio del test (invia comando alla coda)
         ESP_LOGI(TAG, "--------------------------------------------------");
+        print_current_time(TAG);
         ESP_LOGI(TAG, "Starting sequential diagnostics check...");
         led_blink_start(200, 200, 400, false); 
         vTaskDelay(pdMS_TO_TICKS(400)); // Aspetta che il lampeggio singolo finisca
@@ -532,6 +536,10 @@ static void diagnostics_task(void *pvParameters) {
 // Entry point standard di ESP-IDF (su FreeRTOS corrisponde ad un task generato internamente all'avvio)
 void app_main(void) {
     ESP_LOGI(TAG, "Starting sequential diagnostics on ESP32-C3...");
+
+    // Imposta l'aggiornamento del tempo ogni ora (TODO: scablare):
+    //esp_sntp_set_sync_interval(60*60*1000);
+    esp_sntp_set_sync_interval(1*60*1000);
 
     // 1. Inizializza il file system NVS
     ESP_ERROR_CHECK(config_nvs_init());
