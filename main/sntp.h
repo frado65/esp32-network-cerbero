@@ -23,11 +23,11 @@ void initialize_sntp(const char* tag) {
     ESP_LOGI(tag, "SNTP inizializzato. Sincronizzazione in corso...");
 }
 
-void print_current_time(const char* tag) {
-    time_t now; // alla fine è un long int.
+void print_time(const char* tag, time_t* p_now) {
+    //time_t now; // alla fine è un long int.
     struct tm timeinfo;
-    time(&now);
-    localtime_r(&now, &timeinfo);
+    time(p_now);
+    localtime_r(p_now, &timeinfo);
 
     // timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec contengono l'ora corretta
     char strftime_buf[64];

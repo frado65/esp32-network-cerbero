@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 // Librerie core di FreeRTOS per la gestione di task, code, semafori ed eventi
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -26,6 +27,7 @@
 #include "param_persist.h"
 #include "params_http.h"
 #include "sntp.h"
+#include "event_log.h"
 
 
 #define AP_SSID "ESP32_Network-Cerbero"
@@ -33,6 +35,13 @@
 
 // Variabile globale che conterrà i parametri di rete
 app_config_t device_config;
+
+#define LOOP_TIME_MS 10000
+
+// 
+TickType_t g_prev_cycle_start = 0;
+
+DiagnosisEntry g_prev_dignosis_entry = {0};
 
 // Definizione del pin del Buzzer
 #define BUZZER_PIN 3
@@ -422,7 +431,10 @@ static void diagnostics_task(void *pvParameters) {
 
         // 1. Lampeggio iniziale di notifica per segnalare l'inizio del test (invia comando alla coda)
         ESP_LOGI(TAG, "--------------------------------------------------");
-        print_current_time(TAG);
+        DiagnosisEntry _dignosis_entry ={0};
+        _dignosis_entry.error_mask |= 1;
+        time(&_dignosis_entry.timestamp);
+        print_time(TAG, &_dignosis_entry.timestamp);
         ESP_LOGI(TAG, "Starting sequential diagnostics check...");
         led_blink_start(200, 200, 400, false); 
         vTaskDelay(pdMS_TO_TICKS(400)); // Aspetta che il lampeggio singolo finisca
@@ -430,103 +442,138 @@ static void diagnostics_task(void *pvParameters) {
         // 2. Controllo LAN: Risoluzione IP router da stringa a formato binario (ip4addr_aton)
         ip_addr_t router_ip;
 
+        bool _test_continue = true;
+        {
+            uint32_t elapsed_ms = (cycle_start - g_prev_cycle_start) * portTICK_PERIOD_MS;
+            ESP_LOGI(TAG, "DBG: elapsed_ms = %" PRIu32, elapsed_ms);
+            g_prev_cycle_start = cycle_start;
+            if (elapsed_ms > LOOP_TIME_MS) { 
+                _dignosis_entry.error_mask |= 2;
+            }
+        }
+
         // Tenta di recuperare dinamicamente l'IP del gateway
         if (!get_router_ip(&router_ip)) {
             ESP_LOGE(TAG, "LAN Check FAILED: Impossibile determinare l'IP del router!");
             led_blink_start(100, 100, 5000, false); // Allarme veloce (o con parametro del buzzer se preferisci)
             
-            TickType_t elapsed = xTaskGetTickCount() - cycle_start;
-            int32_t delay_ms = 10000 - (elapsed * portTICK_PERIOD_MS);
-            if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
+            // TickType_t elapsed = xTaskGetTickCount() - cycle_start;
+            // int32_t delay_ms = LOOP_TIME_MS - (elapsed * portTICK_PERIOD_MS);
+            // if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
             
-            continue; // Interrompe l'iterazione e riparte
+            _test_continue = false;
+            _dignosis_entry.error_mask |= 4; // Imposta il bit di errore
+            //continue; // Interrompe l'iterazione e riparte
         }
 
-        // Ora che abbiamo l'IP, lo stampiamo e facciamo il ping
-        ESP_LOGI(TAG, "Check 1/3: LAN - Pinging router at " IPSTR "...", IP2STR(&router_ip.u_addr.ip4));
-        
-        if (!perform_ping(&router_ip)) { // Chiama il wrapper sincrono creato sopra
-            ESP_LOGE(TAG, "LAN Check FAILED!");
-            led_blink_start(100, 100, 5000, false); // Comando di lampeggio veloce
+        if (_test_continue) {
+            // Ora che abbiamo l'IP, lo stampiamo e facciamo il ping
+            ESP_LOGI(TAG, "Check 1/3: LAN - Pinging router at " IPSTR "...", IP2STR(&router_ip.u_addr.ip4));
             
-            // Gestione precisa del timing: calcola quanto tempo è passato dall'inizio del loop
-            // e dormi solo per i millisecondi rimanenti a raggiungere i 10 secondi (10000ms).
-            TickType_t elapsed = xTaskGetTickCount() - cycle_start;
-            int32_t delay_ms = 10000 - (elapsed * portTICK_PERIOD_MS);
-            if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
-            
-            continue; // Interrompe l'iterazione attuale e riparte dall'inizio del while(1)
-        }
-        ESP_LOGI(TAG, "LAN Check PASSED.");
-
-        // 3. Controllo WAN: Stessa logica del controllo LAN, ma punta all'8.8.8.8
-        const char* target_ip_str = (strlen(device_config.ping_ip) > 0) ? device_config.ping_ip : "8.8.8.8";
-        ip_addr_t wan_ip;
-        ip4addr_aton(target_ip_str, &wan_ip.u_addr.ip4); // ip4addr_aton("8.8.8.8", &wan_ip.u_addr.ip4);
-        wan_ip.type = IPADDR_TYPE_V4;
-
-        ESP_LOGI(TAG, "Check 2/3: WAN - Pinging DNS at %s...", target_ip_str);
-        if (!perform_ping(&wan_ip)) {
-            ESP_LOGE(TAG, "WAN Check FAILED!");
-            led_blink_start(200, 200, 5000, true); // Comando di lampeggio medio
-            
-            // Calcolo compensato dell'attesa
-            TickType_t elapsed = xTaskGetTickCount() - cycle_start;
-            int32_t delay_ms = 10000 - (elapsed * portTICK_PERIOD_MS);
-            if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
-            continue; // Torna su
-        }
-        ESP_LOGI(TAG, "WAN Check PASSED.");
-
-        // Recupera l'host dall'NVS, con fallback di sicurezza se la stringa è vuota
-        const char* target_host = (strlen(device_config.ping_host) > 0) ? device_config.ping_host : "google.it";
-
-        // 4. Controllo DNS: Risolve l'hostname
-        ESP_LOGI(TAG, "Check 3/3: DNS - Resolving name %s...", target_host);
-        
-        struct addrinfo hints = {
-            .ai_family = AF_INET,       // Forza la ricerca di un IPv4
-            .ai_socktype = SOCK_STREAM, // Tipo di socket (ininfluente per la sola risoluzione)
-        };
-        struct addrinfo *res = NULL;
-        
-        // Chiamata all'API POSIX di lwIP per convertire l'URL nell'IP binario.
-        // È bloccante, interroga il server DNS configurato sul router (ricevuto via DHCP)
-        int err = getaddrinfo(target_host, NULL, &hints, &res);
-        bool dns_success = false;
-
-        if (err == 0 && res != NULL) {
-            // Estrae l'indirizzo IPv4 dalla struttura e lo converte in stringa per stamparlo
-            struct in_addr *addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
-            char ip_str[16];
-            inet_ntoa_r(*addr, ip_str, sizeof(ip_str));
-            ESP_LOGI(TAG, "Resolved %s to %s. Verifying reachability...", target_host, ip_str);
-
-            // Costruisce la struttura ip_addr_t passandogli l'IP binario appena risolto
-            ip_addr_t dns_target_ip;
-            dns_target_ip.type = IPADDR_TYPE_V4;
-            dns_target_ip.u_addr.ip4.addr = addr->s_addr;
-
-            // Fila finale: pinge l'IP appena ottenuto dal server DNS
-            if (perform_ping(&dns_target_ip)) {
-                dns_success = true;
-            } else {
-                ESP_LOGE(TAG, "Ping to resolved %s IP address failed.", target_host);
+            if (!perform_ping(&router_ip)) { // Chiama il wrapper sincrono creato sopra
+                ESP_LOGE(TAG, "LAN Check FAILED!");
+                led_blink_start(100, 100, 5000, false); // Comando di lampeggio veloce
+                
+                // // Gestione precisa del timing: calcola quanto tempo è passato dall'inizio del loop
+                // // e dormi solo per i millisecondi rimanenti a raggiungere i 10 secondi (10000ms).
+                // TickType_t elapsed = xTaskGetTickCount() - cycle_start;
+                // int32_t delay_ms = LOOP_TIME_MS - (elapsed * portTICK_PERIOD_MS);
+                // if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
+                
+                _dignosis_entry.error_mask |= 8; // Imposta il bit di errore
+                _test_continue = false;
+                //continue; // Interrompe l'iterazione attuale e riparte dall'inizio del while(1)
             }
-            freeaddrinfo(res); // Libera la memoria allocata internamente da getaddrinfo
-        } else {
-            ESP_LOGE(TAG, "DNS resolution of %s failed with code: %d", target_host, err);
+            else {
+                ESP_LOGI(TAG, "LAN Check PASSED.");
+            }
         }
 
-        if (!dns_success) {
-            ESP_LOGE(TAG, "DNS Check FAILED!");
-            led_blink_start(500, 500, 5000, true); // Comando di lampeggio lento
-        } else {
-            ESP_LOGI(TAG, "DNS Check PASSED. Network is fully operational.");
+        if (_test_continue) {
+            // 3. Controllo WAN: Stessa logica del controllo LAN, ma punta all'8.8.8.8
+            const char* target_ip_str = (strlen(device_config.ping_ip) > 0) ? device_config.ping_ip : "8.8.8.8";
+            ip_addr_t wan_ip;
+            ip4addr_aton(target_ip_str, &wan_ip.u_addr.ip4); // ip4addr_aton("8.8.8.8", &wan_ip.u_addr.ip4);
+            wan_ip.type = IPADDR_TYPE_V4;
+
+            ESP_LOGI(TAG, "Check 2/3: WAN - Pinging DNS at %s...", target_ip_str);
+            if (!perform_ping(&wan_ip)) {
+                ESP_LOGE(TAG, "WAN Check FAILED!");
+                led_blink_start(200, 200, 5000, true); // Comando di lampeggio medio
+                
+                // // Calcolo compensato dell'attesa
+                // TickType_t elapsed = xTaskGetTickCount() - cycle_start;
+                // int32_t delay_ms = LOOP_TIME_MS - (elapsed * portTICK_PERIOD_MS);
+                // if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
+                _dignosis_entry.error_mask |= 16; // Imposta il bit di errore
+                _test_continue = false;
+                //continue; // Torna su
+            }
+            else {
+                ESP_LOGI(TAG, "WAN Check PASSED.");
+            }
         }
+
+        if (_test_continue) {
+            // Recupera l'host dall'NVS, con fallback di sicurezza se la stringa è vuota
+            const char* target_host = (strlen(device_config.ping_host) > 0) ? device_config.ping_host : "google.it";
+
+            // 4. Controllo DNS: Risolve l'hostname
+            ESP_LOGI(TAG, "Check 3/3: DNS - Resolving name %s...", target_host);
+            
+            struct addrinfo hints = {
+                .ai_family = AF_INET,       // Forza la ricerca di un IPv4
+                .ai_socktype = SOCK_STREAM, // Tipo di socket (ininfluente per la sola risoluzione)
+            };
+            struct addrinfo *res = NULL;
+            
+            // Chiamata all'API POSIX di lwIP per convertire l'URL nell'IP binario.
+            // È bloccante, interroga il server DNS configurato sul router (ricevuto via DHCP)
+            int err = getaddrinfo(target_host, NULL, &hints, &res);
+            bool dns_success = false;
+
+            if (err == 0 && res != NULL) {
+                // Estrae l'indirizzo IPv4 dalla struttura e lo converte in stringa per stamparlo
+                struct in_addr *addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
+                char ip_str[16];
+                inet_ntoa_r(*addr, ip_str, sizeof(ip_str));
+                ESP_LOGI(TAG, "Resolved %s to %s. Verifying reachability...", target_host, ip_str);
+
+                // Costruisce la struttura ip_addr_t passandogli l'IP binario appena risolto
+                ip_addr_t dns_target_ip;
+                dns_target_ip.type = IPADDR_TYPE_V4;
+                dns_target_ip.u_addr.ip4.addr = addr->s_addr;
+
+                // Fila finale: pinge l'IP appena ottenuto dal server DNS
+                if (perform_ping(&dns_target_ip)) {
+                    dns_success = true;
+                } else {
+                    ESP_LOGE(TAG, "Ping to resolved %s IP address failed.", target_host);
+                }
+                freeaddrinfo(res); // Libera la memoria allocata internamente da getaddrinfo
+            } else {
+                ESP_LOGE(TAG, "DNS resolution of %s failed with code: %d", target_host, err);
+            }
+
+            if (!dns_success) {
+                ESP_LOGE(TAG, "DNS Check FAILED!");
+                _dignosis_entry.error_mask |= 32; // Imposta il bit di errore
+                led_blink_start(500, 500, 5000, true); // Comando di lampeggio lento
+                _test_continue = false;
+            } else {
+                ESP_LOGI(TAG, "DNS Check PASSED. Network is fully operational.");
+            }
+        }
+
+        if (g_prev_dignosis_entry.error_mask != _dignosis_entry.error_mask) {
+            ESP_LOGI(TAG, "DBG: >>>> ERROR MASK CHANGED!");
+            // TODO: mettere in memoria l'evento.
+        }
+        g_prev_dignosis_entry = _dignosis_entry;
+
         // Calcolo dell'attesa finale a fine ciclo, tenendo conto del tempo impiegato per i tre controlli
         TickType_t elapsed = xTaskGetTickCount() - cycle_start;
-        int32_t delay_ms = 10000 - (elapsed * portTICK_PERIOD_MS);
+        int32_t delay_ms = LOOP_TIME_MS - (elapsed * portTICK_PERIOD_MS); 
         if (delay_ms > 0) {
             vTaskDelay(pdMS_TO_TICKS(delay_ms)); // Restante parte dei 10 secondi
         }
