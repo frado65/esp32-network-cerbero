@@ -221,10 +221,34 @@ void wifi_init_sta(void) {
     vTaskDelay(pdMS_TO_TICKS(50));
 
     bool force_ap = false;
-    // Leggi il livello logico del pin (0 se premuto, 1 se non premuto)
+    // Se all'avvio il pulsante è premuto (livello logico LOW/0)
     if (gpio_get_level(FORCE_AP_BUTTON_PIN) == 0) {
-        force_ap = true;
-        ESP_LOGW(TAG, "Pulsante su GPIO %d rilevato PREMUTO all'avvio! Forza modalita' Access Point.", FORCE_AP_BUTTON_PIN);
+        ESP_LOGI(TAG, "Pulsante premuto all'avvio. Avvio del test di 3 secondi...");
+
+        // Inizializza il buzzer e attiva il beep continuo
+        buzzer_init();
+        buzzer_set_state(true);
+
+        bool released = false;
+        // Campiona il pulsante ogni 100 ms per un totale di 3 secondi (30 iterazioni)
+        for (int i = 0; i < 30; i++) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            // Se in qualsiasi momento il pulsante viene rilasciato (livello logico HIGH/1)
+            if (gpio_get_level(FORCE_AP_BUTTON_PIN) != 0) {
+                released = true;
+                break;
+            }
+        }
+
+        // Spegne il buzzer dopo il test
+        buzzer_set_state(false);
+
+        if (!released) {
+            force_ap = true;
+            ESP_LOGW(TAG, "Pulsante su GPIO %d tenuto premuto per 3 secondi. Forza modalita' Access Point!", FORCE_AP_BUTTON_PIN);
+        } else {
+            ESP_LOGI(TAG, "Pulsante su GPIO %d rilasciato prima dei 3 secondi. Avvio normale in corso.", FORCE_AP_BUTTON_PIN);
+        }
     } else {
         ESP_LOGI(TAG, "Pulsante su GPIO %d non premuto all'avvio.", FORCE_AP_BUTTON_PIN);
     }
