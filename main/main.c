@@ -36,6 +36,10 @@ app_config_t device_config;
 // Definizione del pin del Buzzer
 #define BUZZER_PIN 3
 
+// Definizione del pin del pulsante per forzare la modalita' Access Point (AP)
+// Collegato a GPIO 2, normalmente aperto, attivo a livello basso (0)
+#define FORCE_AP_BUTTON_PIN 2
+
 // Tag utilizzato per filtrare i log sulla seriale
 static const char *TAG = "main";
 
@@ -202,6 +206,29 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
 }
 
 void wifi_init_sta(void) {
+    // Configura il pin per il pulsante Normalmente Aperto per forzare l'Access Point.
+    // Il pulsante chiude verso massa (GND) quindi usiamo PULLUP interno. Stato premuto = 0 (LOW).
+    gpio_config_t io_conf_btn = {
+        .pin_bit_mask = (1ULL << FORCE_AP_BUTTON_PIN),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&io_conf_btn));
+
+    // Ritardo di stabilizzazione del pin prima della lettura per evitare transienti di accensione
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    bool force_ap = false;
+    // Leggi il livello logico del pin (0 se premuto, 1 se non premuto)
+    if (gpio_get_level(FORCE_AP_BUTTON_PIN) == 0) {
+        force_ap = true;
+        ESP_LOGW(TAG, "Pulsante su GPIO %d rilevato PREMUTO all'avvio! Forza modalita' Access Point.", FORCE_AP_BUTTON_PIN);
+    } else {
+        ESP_LOGI(TAG, "Pulsante su GPIO %d non premuto all'avvio.", FORCE_AP_BUTTON_PIN);
+    }
+
     wifi_event_group = xEventGroupCreate();
 
     ESP_ERROR_CHECK(esp_netif_init()); 
@@ -216,8 +243,12 @@ void wifi_init_sta(void) {
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, &instance_any_id));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &instance_got_ip));
 
-    if (strlen(device_config.wifi_ssid) == 0) {
-        ESP_LOGW(TAG, "Nessun SSID configurato. Avvio in modalita' Access Point.");
+    if (force_ap || strlen(device_config.wifi_ssid) == 0) {
+        if (force_ap) {
+            ESP_LOGW(TAG, "Avvio forzato in modalita' Access Point via hardware.");
+        } else {
+            ESP_LOGW(TAG, "Nessun SSID configurato. Avvio in modalita' Access Point.");
+        }
         
         // Interfaccia virtuale dedicata all'AP
         esp_netif_create_default_wifi_ap();
