@@ -177,16 +177,21 @@ static esp_err_t diag_page_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    // Inizio pagina HTML
+// Inizio pagina HTML con lo script di refresh automatico sul click
     int len = snprintf(resp_str, 3072,
         "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Diagnostica</title>"
         "<style>body{font-family:sans-serif;margin:20px;} table{width:100%%;border-collapse:collapse;} "
         "th,td{border:1px solid #ccc;padding:8px;text-align:left;} th{background:#f2f2f2;}</style></head>"
         "<body><h2>Registro Diagnostica</h2>"
-        "<a href='/diag/download'><button style='padding:10px;margin-bottom:15px;cursor:pointer;'>Scarica CSV e Svuota</button></a>"
+        
+        // IL TRUCCO: Al click, avvia il download e dopo 500ms ricarica la pagina corrente
+        "<button style='padding:10px;margin-bottom:15px;cursor:pointer;' "
+        "onclick=\"location.href='/diag/download'; setTimeout(function(){ location.reload(); }, 500);\">"
+        "Scarica CSV e Svuota</button>"
+        
         " | <a href='/'>Torna alla Home</a><br><br>"
         "<table><tr><th>#</th><th>Timestamp</th><th>Error Mask (Bin)</th></tr>");
-
+        
     uint16_t count = diag_get_count();
     if (count == 0) {
         len += snprintf(resp_str + len, 3072 - len, "<tr><td colspan='3'>Nessun dato registrato.</td></tr>");
