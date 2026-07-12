@@ -1,4 +1,4 @@
-idf_component_register(SRCS "main.c"
+idf_component_register(SRCS "event_log.c" "main.c"
                             "params_http.c"
                             "param_persist.c"
                        INCLUDE_DIRS "."

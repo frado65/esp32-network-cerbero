@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
+#include <stdint.h>
+#include <time.h>
+#include <sys/param.h>
 // Librerie core di FreeRTOS per la gestione di task, code, semafori ed eventi
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -567,7 +570,10 @@ static void diagnostics_task(void *pvParameters) {
 
         if (g_prev_dignosis_entry.error_mask != _dignosis_entry.error_mask) {
             ESP_LOGI(TAG, "DBG: >>>> ERROR MASK CHANGED!");
-            // TODO: mettere in memoria l'evento.
+            bool lost_data = diag_append(g_prev_dignosis_entry);
+            if (lost_data) {
+                ESP_LOGW(TAG, "Buffer pieno! Sovrascrittura avvenuta, dati persi.");
+            }
         }
         g_prev_dignosis_entry = _dignosis_entry;
 
