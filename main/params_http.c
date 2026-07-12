@@ -12,6 +12,7 @@
 
 #include "event_log.h"
 
+#define BUFFER_SIZE 3072
 
 static const char *TAG = "HTTP_SERVER";
 static httpd_handle_t server = NULL;
@@ -29,7 +30,15 @@ static const char favicon_svg[] =
 
 // Template HTML: i %s verranno sostituiti a runtime con i valori attuali
 static const char* form_template = 
-    "... (header e CSS) ..."
+    "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Configurazione</title>"
+    "<style>"
+    "body{font-family:sans-serif;margin:20px;}"
+    "h2{color:#333;}"
+    "label{display:block;margin-top:10px;}"
+    "input{margin-bottom:10px;padding:5px;width:250px;}"
+    "button{display:block;padding:8px 15px;margin-top:10px;cursor:pointer;}"
+    "</style></head><body>"
+    "<a href='/'>HOME</a>"
     "<h2>Configurazione Operativa (Hot)</h2>"
     "<form method='POST' action='/submit_hot'>"
     "<label>IP Ping:</label><input type='text' name='ping_ip' value='%s'>"
@@ -54,8 +63,8 @@ static void byte_to_binary_str(uint8_t byte, char *out_str) {
 
 // Handler per la richiesta GET (Mostra la pagina con i dati compilati)
 static esp_err_t form_get_handler(httpd_req_t *req) {
-    // Alloca 1024 byte per contenere la pagina completa
-    char *resp_str = malloc(1024);
+    // Alloca BUFFER_SIZE byte per contenere la pagina completa
+    char *resp_str = malloc(BUFFER_SIZE);
     if (resp_str == NULL) {
         ESP_LOGE(TAG, "Impossibile allocare memoria per la pagina HTML");
         httpd_resp_send_500(req);
@@ -63,7 +72,7 @@ static esp_err_t form_get_handler(httpd_req_t *req) {
     }
 
     // Inietta i valori attuali nel template HTML
-    snprintf(resp_str, 1024, form_template, 
+    snprintf(resp_str, BUFFER_SIZE, form_template, 
              g_device_config.ping_ip, 
              g_device_config.ping_host,
              g_device_config.wifi_ssid, 
@@ -166,40 +175,42 @@ static esp_err_t favicon_get_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-
 // Handler per mostrare la tabella dei dati diagnostici
 static esp_err_t diag_page_handler(httpd_req_t *req) {
     // Allocazione dinamica per contenere la pagina HTML con la tabella
     // 2048 o più a seconda di quanti tag HTML vuoi inserire
-    char *resp_str = malloc(3072);
+    
+    char *resp_str = malloc(BUFFER_SIZE);
     if (resp_str == NULL) {
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
 
     // Inizio pagina HTML con lo script di refresh automatico sul click
-    int len = snprintf(resp_str, 3072,
+    int len = snprintf(resp_str, BUFFER_SIZE,
         "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Diagnostica</title>"
         "<style>body{font-family:sans-serif;margin:20px;} table{width:100%%;border-collapse:collapse;} "
         "th,td{border:1px solid #ccc;padding:8px;text-align:left;} th{background:#f2f2f2;}</style></head>"
-        "<body><h2>Registro Diagnostica</h2>"
-        
+        "<body>"
+        "<h2>Registro Diagnostica</h2>"
         // IL TRUCCO: Al click, avvia il download e dopo 500ms ricarica la pagina corrente
-        "<button style='padding:10px;margin-bottom:15px;cursor:pointer;' "
-        "onclick=\"location.href='/diag/download'; setTimeout(function(){ location.reload(); }, 500);\">"
-        "Scarica CSV e Svuota</button>"
-        
-        " | <a href='/'>Torna alla Home</a><br><br>"
+        "<button style='padding:10px;margin-bottom:15px;cursor:pointer;'"
+        " onclick=\"location.href='/diag/download';"
+        " setTimeout(function(){ location.reload(); }, 500);\">"
+        " Scarica CSV e Svuota"
+        "</button>"
+        " | <a href='/params'>Params</a>"
+        "<br><br>"
         "<table><tr><th>#</th><th>Timestamp</th><th>Error Mask (Bin)</th></tr>");
         
     uint16_t count = diag_get_count();
     if (count == 0) {
-        len += snprintf(resp_str + len, 3072 - len, "<tr><td colspan='3'>Nessun dato registrato.</td></tr>");
+        len += snprintf(resp_str + len, BUFFER_SIZE - len, "<tr><td colspan='3'>Nessun dato registrato.</td></tr>");
     } else {
         for (uint16_t i = 0; i < count; i++) {
             DiagnosisEntry entry;
             if (diag_extract(i, &entry)) {
-                if (3072 - len < 150) break; // Margine di sicurezza aumentato per le stringhe più lunghe
+                if (BUFFER_SIZE - len < 150) break; // Margine di sicurezza aumentato per le stringhe più lunghe
                 
                 // 1. Conversione del Timestamp
                 char time_buf[24];
@@ -211,7 +222,7 @@ static esp_err_t diag_page_handler(httpd_req_t *req) {
                 char bin_buf[9];
                 byte_to_binary_str((uint8_t)(entry.error_mask & 0xFF), bin_buf);
                 
-                len += snprintf(resp_str + len, 3072 - len,
+                len += snprintf(resp_str + len, BUFFER_SIZE - len,
                     "<tr><td>%d</td><td>%s</td><td><code>b%s</code></td></tr>",
                     i + 1, time_buf, bin_buf);
             }
@@ -219,7 +230,7 @@ static esp_err_t diag_page_handler(httpd_req_t *req) {
     }
 
     // Chiusura tag HTML
-    snprintf(resp_str + len, 3072 - len, "</table></body></html>");
+    snprintf(resp_str + len, BUFFER_SIZE - len, "</table></body></html>");
 
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
@@ -284,7 +295,7 @@ esp_err_t start_webserver(void) {
     // Inizializza e avvia il server
     if (httpd_start(&server, &config) == ESP_OK) {
 httpd_uri_t uri_get = {
-            .uri       = "/",
+            .uri       = "/params",
             .method    = HTTP_GET,
             .handler   = form_get_handler,
             .user_ctx  = NULL
@@ -317,7 +328,7 @@ httpd_uri_t uri_get = {
 
         // URI per la visualizzazione della Tabella Diagnostica
         httpd_uri_t uri_diag = {
-            .uri       = "/diag",
+            .uri       = "/",
             .method    = HTTP_GET,
             .handler   = diag_page_handler,
             .user_ctx  = NULL
