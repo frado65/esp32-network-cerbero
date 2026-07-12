@@ -44,3 +44,15 @@ bool diag_extract(uint16_t index, DiagnosisEntry *out_entry) {
     *out_entry = g_diag_buffer[_target_idx];
     return true;
 }
+
+void diag_clear(void) {
+    // Basta azzerare la testa e il contatore. I vecchi dati rimasti
+    // in memoria verranno sovrascritti al prossimo diag_append.
+    g_diag_head = 0;
+    g_diag_count = 0;
+}
+
+uint16_t diag_get_count(void) {
+    return g_diag_count;
+}
+

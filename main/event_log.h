@@ -32,3 +32,7 @@ bool diag_append(DiagnosisEntry diagnosisEntry);
 // Estrae l'i-esimo elemento dal più vecchio (0) al più recente (count-1)
 bool diag_extract(uint16_t index, DiagnosisEntry *out_entry);
 
+void diag_clear(void);
+
+uint16_t diag_get_count(void);
+

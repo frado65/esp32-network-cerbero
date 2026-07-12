@@ -1,11 +1,17 @@
+#include <esp_http_server.h>
+#include <string.h>
+#include <time.h>
+
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
 #include "params_http.h"
 #include "param_persist.h"
-#include <esp_http_server.h>
 #include "esp_log.h"
-#include <string.h>
+
+#include "event_log.h"
+
 
 static const char *TAG = "HTTP_SERVER";
 static httpd_handle_t server = NULL;
@@ -35,6 +41,16 @@ static const char* form_template =
     "<label>SSID WiFi:</label><input type='text' name='ssid' value='%s'>"
     "<label>Password:</label><input type='password' name='pass' value='%s'>"
     "<button type='submit'>Salva e Riavvia</button></form></body></html>";
+
+
+// Converte un byte in una stringa di 8 caratteri binari + \0
+static void byte_to_binary_str(uint8_t byte, char *out_str) {
+    for (int i = 7; i >= 0; i--) {
+        out_str[7 - i] = (byte & (1 << i)) ? '1' : '0';
+    }
+    out_str[8] = '\0';
+}
+
 
 // Handler per la richiesta GET (Mostra la pagina con i dati compilati)
 static esp_err_t form_get_handler(httpd_req_t *req) {
@@ -151,6 +167,112 @@ static esp_err_t favicon_get_handler(httpd_req_t *req) {
 }
 
 
+// Handler per mostrare la tabella dei dati diagnostici
+static esp_err_t diag_page_handler(httpd_req_t *req) {
+    // Allocazione dinamica per contenere la pagina HTML con la tabella
+    // 2048 o più a seconda di quanti tag HTML vuoi inserire
+    char *resp_str = malloc(3072);
+    if (resp_str == NULL) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    // Inizio pagina HTML
+    int len = snprintf(resp_str, 3072,
+        "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Diagnostica</title>"
+        "<style>body{font-family:sans-serif;margin:20px;} table{width:100%%;border-collapse:collapse;} "
+        "th,td{border:1px solid #ccc;padding:8px;text-align:left;} th{background:#f2f2f2;}</style></head>"
+        "<body><h2>Registro Diagnostica</h2>"
+        "<a href='/diag/download'><button style='padding:10px;margin-bottom:15px;cursor:pointer;'>Scarica CSV e Svuota</button></a>"
+        " | <a href='/'>Torna alla Home</a><br><br>"
+        "<table><tr><th>#</th><th>Timestamp</th><th>Error Mask (Bin)</th></tr>");
+
+    uint16_t count = diag_get_count();
+    if (count == 0) {
+        len += snprintf(resp_str + len, 3072 - len, "<tr><td colspan='3'>Nessun dato registrato.</td></tr>");
+    } else {
+        for (uint16_t i = 0; i < count; i++) {
+            DiagnosisEntry entry;
+            if (diag_extract(i, &entry)) {
+                if (3072 - len < 150) break; // Margine di sicurezza aumentato per le stringhe più lunghe
+                
+                // 1. Conversione del Timestamp
+                char time_buf[24];
+                time_t t = (time_t)entry.timestamp; // Se è in millisecondi, fai: entry.timestamp / 1000;
+                struct tm *tm_info = localtime(&t);
+                strftime(time_buf, sizeof(time_buf), "%Y-%m-%d_%H-%m-%S", tm_info);
+
+                // 2. Conversione dell'Error Mask (prendiamo solo gli 8 bit meno significativi)
+                char bin_buf[9];
+                byte_to_binary_str((uint8_t)(entry.error_mask & 0xFF), bin_buf);
+                
+                len += snprintf(resp_str + len, 3072 - len,
+                    "<tr><td>%d</td><td>%s</td><td><code>%s</code></td></tr>",
+                    i + 1, time_buf, bin_buf);
+            }
+        }
+    }
+
+    // Chiusura tag HTML
+    snprintf(resp_str + len, 3072 - len, "</table></body></html>");
+
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
+    
+    free(resp_str);
+    return ESP_OK;
+}
+
+// Handler per il download del CSV e successivo wipe del buffer
+static esp_err_t diag_download_csv_handler(httpd_req_t *req) {
+    // Allochiamo un buffer temporaneo per chunk di testo o per l'intero file.
+    // Con 64 entry massime, il CSV intero occuperà circa 1.5 - 2 KB.
+    char *csv_buf = malloc(2048);
+    if (csv_buf == NULL) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    // Forza il browser a scaricare il contenuto come file invece di visualizzarlo
+    httpd_resp_set_type(req, "text/csv");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=diagnostica_cerbero.csv");
+
+    int len = snprintf(csv_buf, 2048, "Indice;Timestamp;ErrorMask\n");
+
+    uint16_t count = diag_get_count();
+    for (uint16_t i = 0; i < count; i++) {
+        DiagnosisEntry entry;
+        if (diag_extract(i, &entry)) {
+            if (2048 - len < 80) break;
+
+            // 1. Conversione del Timestamp
+            char time_buf[24];
+            time_t t = (time_t)entry.timestamp; // Se è in millisecondi: entry.timestamp / 1000;
+            struct tm *tm_info = localtime(&t);
+            strftime(time_buf, sizeof(time_buf), "%Y-%m-%d_%H-%m-%S", tm_info);
+
+            // 2. Conversione dell'Error Mask
+            char bin_buf[9];
+            byte_to_binary_str((uint8_t)(entry.error_mask & 0xFF), bin_buf);
+
+            len += snprintf(csv_buf + len, 2048 - len, "%d;%s;%s\n",
+                            i + 1, time_buf, bin_buf);
+        }
+    }
+
+    // Spedisci il file CSV creato
+    httpd_resp_send(req, csv_buf, len);
+    free(csv_buf);
+
+    // !! AZIONE CRITICA !! 
+    // Svuota l'array solo dopo che l'invio della risposta HTTP è andato a buon fine
+    diag_clear();
+    ESP_LOGI(TAG, "Buffer diagnostico scaricato e svuotato.");
+
+    return ESP_OK;
+}
+
+
 esp_err_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     
@@ -187,6 +309,24 @@ httpd_uri_t uri_get = {
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(server, &uri_favicon);
+
+        // URI per la visualizzazione della Tabella Diagnostica
+        httpd_uri_t uri_diag = {
+            .uri       = "/diag",
+            .method    = HTTP_GET,
+            .handler   = diag_page_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &uri_diag);
+
+        // URI per il download del CSV
+        httpd_uri_t uri_diag_down = {
+            .uri       = "/diag/download",
+            .method    = HTTP_GET,
+            .handler   = diag_download_csv_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &uri_diag_down);
 
         ESP_LOGI(TAG, "Server HTTP avviato");
         return ESP_OK;
