@@ -37,7 +37,7 @@
 #define AP_PASS "netcer1357"
 
 // Variabile globale che conterrà i parametri di rete
-app_config_t device_config;
+app_config_t g_device_config;
 
 #define LOOP_TIME_MS 10000
 
@@ -282,7 +282,7 @@ void wifi_init_sta(void) {
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, &instance_any_id));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &instance_got_ip));
 
-    if (force_ap || strlen(device_config.wifi_ssid) == 0) {
+    if (force_ap || strlen(g_device_config.wifi_ssid) == 0) {
         if (force_ap) {
             ESP_LOGW(TAG, "Avvio forzato in modalita' Access Point via hardware.");
         } else {
@@ -311,7 +311,7 @@ void wifi_init_sta(void) {
         ESP_LOGI(TAG, "Access Point avviato. Collegati a '%s' e apri 192.168.4.1", AP_SSID);
         
     } else {
-        ESP_LOGI(TAG, "SSID trovato: %s. Avvio in modalita' Station.", device_config.wifi_ssid);
+        ESP_LOGI(TAG, "SSID trovato: %s. Avvio in modalita' Station.", g_device_config.wifi_ssid);
 
         // Interfaccia virtuale dedicata alla Station
         esp_netif_create_default_wifi_sta(); 
@@ -322,8 +322,8 @@ void wifi_init_sta(void) {
             },
         };
         
-        strncpy((char *)wifi_config.sta.ssid, device_config.wifi_ssid, sizeof(wifi_config.sta.ssid));
-        strncpy((char *)wifi_config.sta.password, device_config.wifi_password, sizeof(wifi_config.sta.password));        
+        strncpy((char *)wifi_config.sta.ssid, g_device_config.wifi_ssid, sizeof(wifi_config.sta.ssid));
+        strncpy((char *)wifi_config.sta.password, g_device_config.wifi_password, sizeof(wifi_config.sta.password));        
 
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA)); 
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
@@ -494,7 +494,7 @@ static void diagnostics_task(void *pvParameters) {
 
         if (_test_continue) {
             // 3. Controllo WAN: Stessa logica del controllo LAN, ma punta all'8.8.8.8
-            const char* target_ip_str = (strlen(device_config.ping_ip) > 0) ? device_config.ping_ip : "8.8.8.8";
+            const char* target_ip_str = (strlen(g_device_config.ping_ip) > 0) ? g_device_config.ping_ip : "8.8.8.8";
             ip_addr_t wan_ip;
             ip4addr_aton(target_ip_str, &wan_ip.u_addr.ip4); // ip4addr_aton("8.8.8.8", &wan_ip.u_addr.ip4);
             wan_ip.type = IPADDR_TYPE_V4;
@@ -519,7 +519,7 @@ static void diagnostics_task(void *pvParameters) {
 
         if (_test_continue) {
             // Recupera l'host dall'NVS, con fallback di sicurezza se la stringa è vuota
-            const char* target_host = (strlen(device_config.ping_host) > 0) ? device_config.ping_host : "google.it";
+            const char* target_host = (strlen(g_device_config.ping_host) > 0) ? g_device_config.ping_host : "google.it";
 
             // 4. Controllo DNS: Risolve l'hostname
             ESP_LOGI(TAG, "Check 3/3: DNS - Resolving name %s...", target_host);
@@ -598,7 +598,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(config_nvs_init());
 
     // 2. Carica la configurazione dalla memoria Flash
-    config_load(&device_config);
+    config_load(&g_device_config);
 
     // Richiama il setup custom presente nel tuo template (system_utils.c)
     system_utils_init();

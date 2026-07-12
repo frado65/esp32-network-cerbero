@@ -10,25 +10,22 @@
 static const char *TAG = "HTTP_SERVER";
 static httpd_handle_t server = NULL;
 
-extern app_config_t device_config;
+extern app_config_t g_device_config;
 
 // Template HTML: i %s verranno sostituiti a runtime con i valori attuali
 static const char* form_template = 
-    "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1.0'>"
-    "<title>Impostazioni Rete</title>"
-    "<style>body{font-family:Arial,sans-serif;margin:40px;background:#f4f4f9;} "
-    "input{display:block;margin-bottom:15px;padding:8px;width:100%;max-width:300px;box-sizing:border-box;} "
-    "label{font-weight:bold;} "
-    "button{padding:10px 15px;background:#007BFF;color:white;border:none;cursor:pointer;}</style>"
-    "</head><body>"
-    "<h2>Configurazione ESP32</h2>"
-    "<form method='POST' action='/submit'>"
-    "<label>SSID WiFi:</label><input type='text' name='ssid' value='%s' required>"
-    "<label>Password WiFi:</label><input type='password' name='pass' value='%s'>"
-    "<label>IP Ping (es. 8.8.8.8):</label><input type='text' name='ping_ip' value='%s' required>"
-    "<label>Host Ping (es. google.com):</label><input type='text' name='ping_host' value='%s' required>"
-    "<button type='submit'>Salva e Riavvia</button>"
-    "</form></body></html>";
+    "... (header e CSS) ..."
+    "<h2>Configurazione Operativa (Hot)</h2>"
+    "<form method='POST' action='/submit_hot'>"
+    "<label>IP Ping:</label><input type='text' name='ping_ip' value='%s'>"
+    "<label>Host Ping:</label><input type='text' name='ping_host' value='%s'>"
+    "<button type='submit'>Applica Ora</button></form>"
+    "<hr>"
+    "<h2>Configurazione Rete (Cold - Riavvio)</h2>"
+    "<form method='POST' action='/submit_cold'>"
+    "<label>SSID WiFi:</label><input type='text' name='ssid' value='%s'>"
+    "<label>Password:</label><input type='password' name='pass' value='%s'>"
+    "<button type='submit'>Salva e Riavvia</button></form></body></html>";
 
 // Handler per la richiesta GET (Mostra la pagina con i dati compilati)
 static esp_err_t form_get_handler(httpd_req_t *req) {
@@ -42,10 +39,11 @@ static esp_err_t form_get_handler(httpd_req_t *req) {
 
     // Inietta i valori attuali nel template HTML
     snprintf(resp_str, 1024, form_template, 
-             device_config.wifi_ssid, 
-             device_config.wifi_password, 
-             device_config.ping_ip, 
-             device_config.ping_host);
+             g_device_config.ping_ip, 
+             g_device_config.ping_host,
+             g_device_config.wifi_ssid, 
+             g_device_config.wifi_password
+            );
 
     // Invia la pagina popolata
     httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
@@ -55,33 +53,68 @@ static esp_err_t form_get_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// Handler per la richiesta POST (Riceve i dati)
-static esp_err_t form_post_handler(httpd_req_t *req) {
-    char buf[256];
-    int ret, remaining = req->content_len;
+// Handler per parametri "Hot" (Applicazione immediata)
+static esp_err_t form_hot_handler(httpd_req_t *req) {
+    char buf[256] = {0};
 
-    if (remaining >= sizeof(buf)) {
+    const int _ret = httpd_req_recv(req, buf, sizeof(buf)); // (omettendo error checking per brevità)
+    if (_ret <= 0) {
+        return ESP_FAIL;
+    }
+    buf[_ret] = '\0'; // Garantisce che il parsing non legga oltre i dati ricevuti
+    
+    // AZZERA PRIMA DI SCRIVERE: garantisce che i vecchi caratteri non restino lì
+    memset(g_device_config.ping_ip, 0, sizeof(g_device_config.ping_ip));
+    memset(g_device_config.ping_host, 0, sizeof(g_device_config.ping_host));
+
+    // Aggiorna la struttura globale in RAM
+    httpd_query_key_value(buf, "ping_ip", g_device_config.ping_ip, sizeof(g_device_config.ping_ip));
+    httpd_query_key_value(buf, "ping_host", g_device_config.ping_host, sizeof(g_device_config.ping_host));
+
+    ESP_LOGI(TAG, "DEBUG3: Valore estratto: [%s] | Hex: %02x %02x %02x", 
+         g_device_config.ping_host, 
+         g_device_config.ping_host[strlen(g_device_config.ping_host)+1],
+         g_device_config.ping_host[strlen(g_device_config.ping_host)+2],
+         g_device_config.ping_host[strlen(g_device_config.ping_host)+3]);   
+          
+    // Salva in NVS senza riavviare
+    config_save(&g_device_config); 
+
+    httpd_resp_send(req, "<h2>Configurazione aggiornata!</h2><a href='/'>Torna indietro</a>", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+// Handler per parametri "Cold" (Richiede riavvio)
+static esp_err_t form_cold_handler(httpd_req_t *req) {
+    char buf[256] = {0};
+    const int _remaining = req->content_len;
+    int _ret = _remaining;
+
+
+    if (_remaining >= sizeof(buf)) {
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
 
     // Legge il body della richiesta
-    ret = httpd_req_recv(req, buf, remaining);
-    if (ret <= 0) {
+    _ret = httpd_req_recv(req, buf, _remaining);
+    if (_ret <= 0) {
         return ESP_FAIL;
     }
-    buf[ret] = '\0'; // Termina la stringa
+    buf[_ret] = '\0'; // Termina la stringa
 
     ESP_LOGI(TAG, "Ricevuto POST: %s", buf);
 
     app_config_t config;
-    memset(&config, 0, sizeof(app_config_t));
-
+    memcpy(&config, &g_device_config, sizeof(app_config_t));
+    memset(config.wifi_ssid, 0, sizeof(config.wifi_ssid));
+    memset(config.wifi_password, 0, sizeof(config.wifi_password));
+    
     // Estrae i valori dai campi del form
     httpd_query_key_value(buf, "ssid", config.wifi_ssid, sizeof(config.wifi_ssid));
     httpd_query_key_value(buf, "pass", config.wifi_password, sizeof(config.wifi_password));
-    httpd_query_key_value(buf, "ping_ip", config.ping_ip, sizeof(config.ping_ip));
-    httpd_query_key_value(buf, "ping_host", config.ping_host, sizeof(config.ping_host));
+    //httpd_query_key_value(buf, "ping_ip", config.ping_ip, sizeof(config.ping_ip));
+    //httpd_query_key_value(buf, "ping_host", config.ping_host, sizeof(config.ping_host));
 
     // Sostituisce i "+" con gli spazi (codifica URL)
     // Utile se l'SSID contiene spazi
@@ -90,30 +123,21 @@ static esp_err_t form_post_handler(httpd_req_t *req) {
     }
 
     // Salva nella memoria NVS
-    config_save(&config);
-
-    // Risponde all'utente
-    const char* resp = "<h2>Configurazione Salvata!</h2><p>Riavvio in corso...</p>";
-    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-
-    ESP_LOGI(TAG, "Riavvio del sistema richiesto dall'utente via Web...");
+    config_save(&config);    
+    httpd_resp_send(req, "<h2>Salvato. Riavvio in corso...</h2>", HTTPD_RESP_USE_STRLEN);
     
-    // Aspettiamo 1 secondo per dare il tempo allo stack di rete di inviare effettivamente 
-    // la pagina HTML di conferma al browser del telefono prima di "staccare la spina"
-    vTaskDelay(pdMS_TO_TICKS(1000)); 
-    
-    // Riavvia il microcontrollore
-    esp_restart(); 
-
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
     return ESP_OK;
 }
+
 
 esp_err_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     
     // Inizializza e avvia il server
     if (httpd_start(&server, &config) == ESP_OK) {
-        httpd_uri_t uri_get = {
+httpd_uri_t uri_get = {
             .uri       = "/",
             .method    = HTTP_GET,
             .handler   = form_get_handler,
@@ -121,14 +145,21 @@ esp_err_t start_webserver(void) {
         };
         httpd_register_uri_handler(server, &uri_get);
 
-        httpd_uri_t uri_post = {
-            .uri       = "/submit",
+        httpd_uri_t uri_hot = {
+            .uri       = "/submit_hot",
             .method    = HTTP_POST,
-            .handler   = form_post_handler,
+            .handler   = form_hot_handler,
             .user_ctx  = NULL
         };
-        httpd_register_uri_handler(server, &uri_post);
+        httpd_register_uri_handler(server, &uri_hot);
 
+        httpd_uri_t uri_cold = {
+            .uri       = "/submit_cold",
+            .method    = HTTP_POST,
+            .handler   = form_cold_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &uri_cold);
         ESP_LOGI(TAG, "Server HTTP avviato");
         return ESP_OK;
     }
