@@ -12,6 +12,15 @@ static httpd_handle_t server = NULL;
 
 extern app_config_t g_device_config;
 
+// Una favicon SVG leggera e definita (Smile moderno)
+static const char favicon_svg[] = 
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+    "<circle cx='12' cy='12' r='10' fill='#FFD43B'/>"
+    "<circle cx='8.5' cy='9.5' r='1.5' fill='#2B2D42'/>"
+    "<circle cx='15.5' cy='9.5' r='1.5' fill='#2B2D42'/>"
+    "<path d='M8 14.5s2.5 3 4 3 4-3 4-3' fill='none' stroke='#2B2D42' stroke-width='2' stroke-linecap='round'/>"
+    "</svg>";
+
 // Template HTML: i %s verranno sostituiti a runtime con i valori attuali
 static const char* form_template = 
     "... (header e CSS) ..."
@@ -132,6 +141,16 @@ static esp_err_t form_cold_handler(httpd_req_t *req) {
 }
 
 
+static esp_err_t favicon_get_handler(httpd_req_t *req) {
+    // Specifichiamo al browser che è un'immagine vettoriale SVG
+    httpd_resp_set_type(req, "image/svg+xml");
+    
+    // Inviamo la stringa usando strlen visto che è testo puro
+    httpd_resp_send(req, favicon_svg, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+
 esp_err_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     
@@ -160,6 +179,15 @@ httpd_uri_t uri_get = {
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(server, &uri_cold);
+
+        httpd_uri_t uri_favicon = {
+            .uri       = "/favicon.ico",
+            .method    = HTTP_GET,
+            .handler   = favicon_get_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &uri_favicon);
+
         ESP_LOGI(TAG, "Server HTTP avviato");
         return ESP_OK;
     }
