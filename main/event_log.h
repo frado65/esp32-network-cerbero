@@ -22,7 +22,7 @@
  * - 100001 -> (bit5) Problemi DNS, ping verso indirizzo web / URL definito in internet timeout (es: google.com).
  */
 typedef struct {
-    time_t timestamp;        // 
+    time_t timestamp;        // long int
     uint8_t  error_mask;     // Bitfield (es: bit0=OK, bit1=timeout, bit2=LAN, bit3=LAN, bit4=WAN, bit5=DNS) // mettere spiegazione.
 } DiagnosisEntry;
 

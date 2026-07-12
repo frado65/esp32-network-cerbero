@@ -428,6 +428,36 @@ static void diagnostics_task(void *pvParameters) {
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
     ESP_LOGI(TAG, "WiFi connected. Starting periodic network checks.");
 
+    // Attesa non bloccante basata sulla time() standard
+    {
+        const time_t PRIMO_GENNAIO_2000 = 946684800; // 946684800 sono i secondi passati dal 1970 al 1 Gennaio 2000
+        const int LOOP_STEP_WAIT_MS = 1000; // 1 secondo;
+        const int LOOP_TOTAL_WAIT = 10; // 10 secondi;
+        int _ntp_retry = 0;
+        time_t _now;
+        time(&_now);
+
+        if (_now >= PRIMO_GENNAIO_2000) {
+            ESP_LOGI(TAG, "Orario valido già rilevato.");
+        }
+        else{
+            ESP_LOGI(TAG, "Attesa dell'orario sincronizzato (SNTP) ... ");
+            // 946684800 sono i secondi passati dal 1970 al 1 Gennaio 2000
+            while (_now < PRIMO_GENNAIO_2000 && _ntp_retry < LOOP_TOTAL_WAIT) {
+                _ntp_retry++;
+                vTaskDelay(pdMS_TO_TICKS(LOOP_STEP_WAIT_MS)); // Mette il task in pausa per 1 secondo, lasciando libera la CPU
+                time(&_now);                      // Aggiorna il valore del tempo attuale
+                ESP_LOGI(TAG, " .. ");
+            }
+        }
+
+        if (_now >= PRIMO_GENNAIO_2000) {
+            ESP_LOGI(TAG, "Orario valido rilevato. Avvio diagnostica periodica.");
+        } else {
+            ESP_LOGW(TAG, "Timeout NTP raggiunto. Procedo comunque con l'orologio non sincronizzato.");
+        }
+    }
+
     while (1) {
         // Registra il tick di inizio ciclo per calcolare correttamente l'attesa dei 10 secondi finali
         TickType_t cycle_start = xTaskGetTickCount();
@@ -570,7 +600,7 @@ static void diagnostics_task(void *pvParameters) {
 
         if (g_prev_dignosis_entry.error_mask != _dignosis_entry.error_mask) {
             ESP_LOGI(TAG, "DBG: >>>> ERROR MASK CHANGED!");
-            bool lost_data = diag_append(g_prev_dignosis_entry);
+            bool lost_data = diag_append(_dignosis_entry);
             if (lost_data) {
                 ESP_LOGW(TAG, "Buffer pieno! Sovrascrittura avvenuta, dati persi.");
             }
@@ -589,6 +619,21 @@ static void diagnostics_task(void *pvParameters) {
 // Entry point standard di ESP-IDF (su FreeRTOS corrisponde ad un task generato internamente all'avvio)
 void app_main(void) {
     ESP_LOGI(TAG, "Starting sequential diagnostics on ESP32-C3...");
+
+
+    ESP_LOGI("DEBUG", "Forzatura dell'orologio di sistema a zero per test...");
+    {
+        struct timeval tv = {
+            .tv_sec = 0,  // Imposta i secondi al 1 Gennaio 1970, ore 00:00:00
+            .tv_usec = 0
+        };
+        settimeofday(&tv, NULL);
+        
+        // Configura anche la Timezone a UTC per i test, così localtime() non aggiungerà offset 
+        // e sposterà l'orario a ore 01:00:00 a causa del fuso orario italiano
+        setenv("TZ", "UTC0", 1);
+        tzset();
+    }
 
     // Imposta l'aggiornamento del tempo ogni ora (TODO: scablare):
     //esp_sntp_set_sync_interval(60*60*1000);

@@ -177,7 +177,7 @@ static esp_err_t diag_page_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-// Inizio pagina HTML con lo script di refresh automatico sul click
+    // Inizio pagina HTML con lo script di refresh automatico sul click
     int len = snprintf(resp_str, 3072,
         "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Diagnostica</title>"
         "<style>body{font-family:sans-serif;margin:20px;} table{width:100%%;border-collapse:collapse;} "
@@ -212,7 +212,7 @@ static esp_err_t diag_page_handler(httpd_req_t *req) {
                 byte_to_binary_str((uint8_t)(entry.error_mask & 0xFF), bin_buf);
                 
                 len += snprintf(resp_str + len, 3072 - len,
-                    "<tr><td>%d</td><td>%s</td><td><code>%s</code></td></tr>",
+                    "<tr><td>%d</td><td>%s</td><td><code>b%s</code></td></tr>",
                     i + 1, time_buf, bin_buf);
             }
         }
@@ -260,7 +260,7 @@ static esp_err_t diag_download_csv_handler(httpd_req_t *req) {
             char bin_buf[9];
             byte_to_binary_str((uint8_t)(entry.error_mask & 0xFF), bin_buf);
 
-            len += snprintf(csv_buf + len, 2048 - len, "%d;%s;%s\n",
+            len += snprintf(csv_buf + len, 2048 - len, "%d;%s;b%s\n",
                             i + 1, time_buf, bin_buf);
         }
     }
