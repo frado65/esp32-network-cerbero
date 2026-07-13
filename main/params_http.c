@@ -200,14 +200,16 @@ static esp_err_t diag_page_handler(httpd_req_t *req) {
         " Scarica CSV e Svuota"
         "</button>"
         " | <a href='/params'>Params</a>"
-        "<br><br>"
-        "<table><tr><th>#</th><th>Timestamp</th><th>Error Mask (Bin)</th></tr>");
+        "<br>");
         
     uint16_t count = diag_get_count();
+    len += snprintf(resp_str+len, BUFFER_SIZE - len, 
+        "<br>Count=%d (show last 10 events only)<br><br><table><tr><th>#</th><th>Timestamp</th><th>Error Mask (Bin)</th></tr>", count); 
     if (count == 0) {
         len += snprintf(resp_str + len, BUFFER_SIZE - len, "<tr><td colspan='3'>Nessun dato registrato.</td></tr>");
     } else {
-        for (uint16_t i = 0; i < count; i++) {
+        const uint16_t _start = count > 10 ? count - 10 : 0; // massimo 10 righe
+        for (uint16_t i = _start; i < count; i++) {
             DiagnosisEntry entry;
             if (diag_extract(i, &entry)) {
                 if (BUFFER_SIZE - len < 150) break; // Margine di sicurezza aumentato per le stringhe più lunghe
@@ -243,7 +245,8 @@ static esp_err_t diag_page_handler(httpd_req_t *req) {
 static esp_err_t diag_download_csv_handler(httpd_req_t *req) {
     // Allochiamo un buffer temporaneo per chunk di testo o per l'intero file.
     // Con 64 entry massime, il CSV intero occuperà circa 1.5 - 2 KB.
-    char *csv_buf = malloc(2048);
+    const int DOWNLOAD_BUFFER_SIZE = 2048; // = 32byte * 64;
+    char *csv_buf = malloc(DOWNLOAD_BUFFER_SIZE);
     if (csv_buf == NULL) {
         httpd_resp_send_500(req);
         return ESP_FAIL;
@@ -253,13 +256,13 @@ static esp_err_t diag_download_csv_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/csv");
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=diagnostica_cerbero.csv");
 
-    int len = snprintf(csv_buf, 2048, "Indice;Timestamp;ErrorMask\n");
+    int len = snprintf(csv_buf, DOWNLOAD_BUFFER_SIZE, "Indice;Timestamp;ErrorMask\n");
 
     uint16_t count = diag_get_count();
     for (uint16_t i = 0; i < count; i++) {
         DiagnosisEntry entry;
         if (diag_extract(i, &entry)) {
-            if (2048 - len < 80) break;
+            if (DOWNLOAD_BUFFER_SIZE - len < 80) break;
 
             // 1. Conversione del Timestamp
             char time_buf[24];
@@ -271,7 +274,7 @@ static esp_err_t diag_download_csv_handler(httpd_req_t *req) {
             char bin_buf[9];
             byte_to_binary_str((uint8_t)(entry.error_mask & 0xFF), bin_buf);
 
-            len += snprintf(csv_buf + len, 2048 - len, "%d;%s;b%s\n",
+            len += snprintf(csv_buf + len, DOWNLOAD_BUFFER_SIZE - len, "%d;%s;b%s\n",
                             i + 1, time_buf, bin_buf);
         }
     }
