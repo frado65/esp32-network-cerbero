@@ -112,8 +112,8 @@ Il sistema fornisce un feedback immediato su due canali: LED per lo stato visivo
 ---
 
 # 🚧 TODO
-- Aggiungere button per forzare modalità **Access Point (AP)**.
-- Fare in modo che quando si salvano i parametri venga ricaricata la pagina di settings.
+- Aggiungere button per forzare modalità **Access Point (AP)** - FATTO.
+- Fare in modo che quando si salvano i parametri venga ricaricata la pagina di settings - RISTRUTTURATO PAGINE WEB.
 - 
 
 ---
