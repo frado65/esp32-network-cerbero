@@ -1,4 +1,4 @@
-idf_component_register(SRCS "event_log.c" "main.c"
+idf_component_register(SRCS "diagnostics.c" "wifi_manager.c" "network_check.c" "status_indicator.c" "sntp.c" "event_log.c" "main.c"
                             "params_http.c"
                             "param_persist.c"
                             "login_save.c"
