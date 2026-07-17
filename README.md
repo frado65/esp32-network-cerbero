@@ -93,10 +93,10 @@ Il sistema fornisce un feedback immediato su due canali: LED per lo stato visivo
 
 | Stato Diagnostica | LED Pattern | Feedback Sonoro (Buzzer) |
 | :--- | :--- | :--- |
-| **Operativo** | Fisso | Silenzioso |
-| **Fail LAN** | Rapido (100ms) | Beep brevi e incalzanti |
-| **Fail WAN** | Medio (200ms) | Tono pulsato intermittente |
-| **Fail DNS** | Lento (500ms) | Tono prolungato di avviso |
+| **Operativo** | Lampeggio ogni 10 sec | Silenzioso |
+| **Fail LAN** | Gruppo di lampeggi Rapido (100ms) ogni 10 sec | Beep brevi e incalzanti |
+| **Fail WAN** | Gruppo di lampeggi Medio (200ms) ogni 10 sec | Tono pulsato intermittente |
+| **Fail DNS** | Gruppo di lampeggi Lento (500ms) ogni 10 sec | Tono prolungato di avviso |
 
 *Nota hardware: Il buzzer è collegato al GPIO 3 accoppiato in AC tramite un condensatore da 100nF, garantendo sicurezza per l'ESP32 e una risposta audio efficiente.*
 
