@@ -21,22 +21,22 @@ typedef struct {
 } led_blink_cmd_t;
 
 // Handle per la coda di messaggi usata per comunicare con il task del LED
-static QueueHandle_t led_cmd_queue = NULL;
+static QueueHandle_t g_led_cmd_queue = NULL;
 
 static void buzzer_init(void)
 {
     // 1. Configura il timer PWM
-    ledc_timer_config_t ledc_timer = {
+    ledc_timer_config_t _ledc_timer = {
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .timer_num = LEDC_TIMER_0,
         .duty_resolution = LEDC_TIMER_13_BIT,
         .freq_hz = 4150,
         .clk_cfg = LEDC_AUTO_CLK
     };
-    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+    ESP_ERROR_CHECK(ledc_timer_config(&_ledc_timer));
 
     // 2. Collega il timer al pin del buzzer
-    ledc_channel_config_t ledc_channel = {
+    ledc_channel_config_t _ledc_channel = {
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel = LEDC_CHANNEL_0,
         .timer_sel = LEDC_TIMER_0,
@@ -45,7 +45,7 @@ static void buzzer_init(void)
         .duty = 0,
         .hpoint = 0
     };
-    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+    ESP_ERROR_CHECK(ledc_channel_config(&_ledc_channel));
 }
 
 void buzzer_set_state(bool on)
@@ -59,7 +59,7 @@ void buzzer_set_state(bool on)
 void led_blink_start(uint32_t period_on_ms, uint32_t period_off_ms,
                      uint32_t duration_ms, bool use_buzzer)
 {
-    led_blink_cmd_t cmd = {
+    led_blink_cmd_t _cmd = {
         .period_on_ms = period_on_ms,
         .period_off_ms = period_off_ms,
         .duration_ms = duration_ms,
@@ -67,17 +67,17 @@ void led_blink_start(uint32_t period_on_ms, uint32_t period_off_ms,
     };
     // xQueueOverwrite sovrascrive l'ultimo messaggio se la coda è piena (in questo caso è di 1 solo elemento).
     // Questo permette di interrompere un lampeggio in corso con uno nuovo senza blocchi.
-    if (led_cmd_queue != NULL) {
-        xQueueOverwrite(led_cmd_queue, &cmd);
+    if (g_led_cmd_queue != NULL) {
+        xQueueOverwrite(g_led_cmd_queue, &_cmd);
     }
 }
 
 // Task FreeRTOS indipendente che gestisce il lampeggio del LED senza bloccare il resto del codice
 static void led_blink_task(void *pvParameters)
 {
-    led_blink_cmd_t current_cmd = {0};
-    bool is_blinking = false;
-    TickType_t start_tick = 0;
+    led_blink_cmd_t _current_cmd = {0};
+    bool _is_blinking = false;
+    TickType_t _start_tick = 0;
 
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << DIAG_LED_PIN),
@@ -92,29 +92,29 @@ static void led_blink_task(void *pvParameters)
     buzzer_set_state(false);
 
     while (1) {
-        led_blink_cmd_t new_cmd;
-        TickType_t wait_ticks = is_blinking ? 0 : portMAX_DELAY;
-        if (xQueueReceive(led_cmd_queue, &new_cmd, wait_ticks) == pdPASS) {
-            current_cmd = new_cmd;
-            is_blinking = current_cmd.duration_ms > 0;
-            start_tick = xTaskGetTickCount();
-            gpio_set_level(DIAG_LED_PIN, is_blinking ? 0 : 1);
-            buzzer_set_state(is_blinking && current_cmd.enable_buzzer);
+        led_blink_cmd_t _new_cmd;
+        TickType_t _wait_ticks = _is_blinking ? 0 : portMAX_DELAY;
+        if (xQueueReceive(g_led_cmd_queue, &_new_cmd, _wait_ticks) == pdPASS) {
+            _current_cmd = _new_cmd;
+            _is_blinking = _current_cmd.duration_ms > 0;
+            _start_tick = xTaskGetTickCount();
+            gpio_set_level(DIAG_LED_PIN, _is_blinking ? 0 : 1);
+            buzzer_set_state(_is_blinking && _current_cmd.enable_buzzer);
         }
 
-        if (is_blinking) {
-            uint32_t elapsed_ms = (xTaskGetTickCount() - start_tick) * portTICK_PERIOD_MS;
-            if (elapsed_ms >= current_cmd.duration_ms) {
+        if (_is_blinking) {
+            uint32_t _elapsed_ms = (xTaskGetTickCount() - _start_tick) * portTICK_PERIOD_MS;
+            if (_elapsed_ms >= _current_cmd.duration_ms) {
                 gpio_set_level(DIAG_LED_PIN, 1);
                 buzzer_set_state(false);
-                is_blinking = false;
+                _is_blinking = false;
             } else {
-                uint32_t period = current_cmd.period_on_ms + current_cmd.period_off_ms;
+                uint32_t period = _current_cmd.period_on_ms + _current_cmd.period_off_ms;
                 if (period > 0) {
-                    uint32_t phase = elapsed_ms % period;
-                    bool on = phase < current_cmd.period_on_ms;
+                    uint32_t phase = _elapsed_ms % period;
+                    bool on = phase < _current_cmd.period_on_ms;
                     gpio_set_level(DIAG_LED_PIN, on ? 0 : 1);
-                    buzzer_set_state(on && current_cmd.enable_buzzer);
+                    buzzer_set_state(on && _current_cmd.enable_buzzer);
                 }
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
@@ -124,8 +124,8 @@ static void led_blink_task(void *pvParameters)
 
 esp_err_t status_indicator_init(void)
 {
-    led_cmd_queue = xQueueCreate(1, sizeof(led_blink_cmd_t));
-    if (led_cmd_queue == NULL) {
+    g_led_cmd_queue = xQueueCreate(1, sizeof(led_blink_cmd_t));
+    if (g_led_cmd_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create LED command queue.");
         return ESP_ERR_NO_MEM;
     }

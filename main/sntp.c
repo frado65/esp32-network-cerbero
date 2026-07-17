@@ -32,15 +32,15 @@ void initialize_sntp(const char *tag)
 void print_time(const char *tag, time_t *p_now)
 {
     //time_t now; // alla fine è un long int.
-    struct tm timeinfo;
+    struct tm _timeinfo;
     /* time aggiorna l'epoch; localtime_r produce una struct tm usando una
      * variante rientrante, sicura rispetto all'uso concorrente tra task. */
     time(p_now);
-    localtime_r(p_now, &timeinfo);
+    localtime_r(p_now, &_timeinfo);
 
-    // timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec contengono l'ora corretta
+    // _timeinfo.tm_hour, _timeinfo.tm_min, _timeinfo.tm_sec contengono l'ora corretta
     char strftime_buf[64];
     /* strftime converte i campi numerici di struct tm in testo leggibile. */
-    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+    strftime(strftime_buf, sizeof(strftime_buf), "%c", &_timeinfo);
     ESP_LOGI(tag, "Ora attuale: %s", strftime_buf);
 }
