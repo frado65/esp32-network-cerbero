@@ -653,8 +653,11 @@ void app_main(void) {
     ESP_LOGI(TAG, "Starting sequential diagnostics on ESP32-C3...");
 
 
-    ESP_LOGI("DEBUG", "Forzatura dell'orologio di sistema a zero per test...");
+    ESP_LOGI("DEBUG", "Forzatura dell'orologio di sistema a zero ...");
     {
+        // Forzo l'orologio di sistema per assicurarmi che allo start non abbia
+        // un valore verosimile che potrebe ingannare il sistema,
+        // Più avanti verra sincronizzato con interenet (SNTP).
         struct timeval tv = {
             .tv_sec = 0,  // Imposta i secondi al 1 Gennaio 1970, ore 00:00:00
             .tv_usec = 0
