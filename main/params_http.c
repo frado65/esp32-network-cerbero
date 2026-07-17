@@ -1,4 +1,5 @@
 #include <esp_http_server.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -12,7 +13,8 @@
 
 #include "event_log.h"
 
-#define BUFFER_SIZE 3072
+#define BUFFER_SIZE 5120
+#define LOGIN_OPTIONS_BUFFER_SIZE 2304
 
 static const char *TAG = "HTTP_SERVER";
 static httpd_handle_t server = NULL;
@@ -35,7 +37,7 @@ static const char* form_template =
     "body{font-family:sans-serif;margin:20px;}"
     "h2{color:#333;}"
     "label{display:block;margin-top:10px;}"
-    "input{margin-bottom:10px;padding:5px;width:250px;}"
+    "input,select{margin-bottom:10px;padding:5px;width:265px;}"
     "button{display:block;padding:8px 15px;margin-top:10px;cursor:pointer;}"
     "</style></head><body>"
     "<a href='/'>HOME</a>"
@@ -47,9 +49,75 @@ static const char* form_template =
     "<hr>"
     "<h2>Configurazione Rete (Cold - Riavvio)</h2>"
     "<form method='POST' action='/submit_cold'>"
-    "<label>SSID WiFi:</label><input type='text' name='ssid' value='%s'>"
-    "<label>Password:</label><input type='password' name='pass' value='%s'>"
+    "<label>Hotspot salvato:</label><select name='login_ixp' id='login_ixp' "
+    "onchange='toggleNewLogin()'>%s</select>"
+    "<div id='new_login'>"
+    "<label>Nuovo SSID WiFi:</label><input type='text' name='ssid' maxlength='31'>"
+    "<label>Nuova password:</label><input type='password' name='pass' maxlength='63'>"
+    "</div>"
+    "<script>function toggleNewLogin(){var n=document.getElementById('login_ixp').value==='-1';"
+    "document.getElementById('new_login').style.display=n?'block':'none';}toggleNewLogin();</script>"
     "<button type='submit'>Salva e Riavvia</button></form></body></html>";
+
+static size_t html_escape(const char *source, char *destination, size_t destination_size)
+{
+    size_t written = 0;
+
+    if (destination_size == 0U) {
+        return 0U;
+    }
+
+    while (*source != '\0') {
+        const char *replacement = NULL;
+        switch (*source) {
+            case '&': replacement = "&amp;"; break;
+            case '<': replacement = "&lt;"; break;
+            case '>': replacement = "&gt;"; break;
+            case '\"': replacement = "&quot;"; break;
+            case '\'': replacement = "&#39;"; break;
+            default: break;
+        }
+
+        const size_t chunk_size = replacement != NULL ? strlen(replacement) : 1U;
+        if (written + chunk_size >= destination_size) {
+            break;
+        }
+
+        if (replacement != NULL) {
+            memcpy(destination + written, replacement, chunk_size);
+        } else {
+            destination[written] = *source;
+        }
+        written += chunk_size;
+        ++source;
+    }
+
+    destination[written] = '\0';
+    return written;
+}
+
+static bool receive_request_body(httpd_req_t *req, char *buffer, size_t buffer_size)
+{
+    if ((size_t)req->content_len >= buffer_size) {
+        return false;
+    }
+
+    size_t received = 0;
+    while (received < (size_t)req->content_len) {
+        const int result = httpd_req_recv(req, buffer + received,
+                                          (size_t)req->content_len - received);
+        if (result == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (result <= 0) {
+            return false;
+        }
+        received += (size_t)result;
+    }
+
+    buffer[received] = '\0';
+    return true;
+}
 
 
 // Converte un byte in una stringa di 8 caratteri binari + \0
@@ -71,18 +139,59 @@ static esp_err_t form_get_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
+    char *login_options = calloc(1, LOGIN_OPTIONS_BUFFER_SIZE);
+    if (login_options == NULL) {
+        ESP_LOGE(TAG, "Impossibile allocare memoria per le opzioni WiFi");
+        free(resp_str);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    const int initial_result = snprintf(
+        login_options, LOGIN_OPTIONS_BUFFER_SIZE,
+        "<option value='-1'%s>-- Inserisci un nuovo hotspot --</option>",
+        g_device_config.wifi_logins.current_ixp == LOGIN_SAVE_NOT_FOUND ? " selected" : "");
+    if (initial_result < 0 || initial_result >= LOGIN_OPTIONS_BUFFER_SIZE) {
+        ESP_LOGE(TAG, "Buffer delle opzioni WiFi insufficiente");
+        free(login_options);
+        free(resp_str);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    size_t options_length = (size_t)initial_result;
+
+    const size_t login_count = login_save_length(&g_device_config.wifi_logins);
+    for (size_t ixp = 0; ixp < login_count; ++ixp) {
+        wifi_login_t login = {0};
+        char escaped_ssid[(WIFI_SSID_BUFFER_SIZE * 6U) + 1U];
+        if (!login_save_get(&g_device_config.wifi_logins, ixp, &login)) {
+            continue;
+        }
+        html_escape(login.ssid, escaped_ssid, sizeof(escaped_ssid));
+
+        const int result = snprintf(
+            login_options + options_length, LOGIN_OPTIONS_BUFFER_SIZE - options_length,
+            "<option value='%u'%s>%s</option>", (unsigned)ixp,
+            g_device_config.wifi_logins.current_ixp == (int32_t)ixp ? " selected" : "",
+            escaped_ssid);
+        if (result < 0 || (size_t)result >= LOGIN_OPTIONS_BUFFER_SIZE - options_length) {
+            break;
+        }
+        options_length += (size_t)result;
+    }
+
     // Inietta i valori attuali nel template HTML
     snprintf(resp_str, BUFFER_SIZE, form_template, 
              g_device_config.ping_ip, 
              g_device_config.ping_host,
-             g_device_config.wifi_ssid, 
-             g_device_config.wifi_password
+             login_options
             );
 
     // Invia la pagina popolata
     httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
     
     // Libera la memoria dinamica
+    free(login_options);
     free(resp_str);
     return ESP_OK;
 }
@@ -91,11 +200,10 @@ static esp_err_t form_get_handler(httpd_req_t *req) {
 static esp_err_t form_hot_handler(httpd_req_t *req) {
     char buf[256] = {0};
 
-    const int _ret = httpd_req_recv(req, buf, sizeof(buf)); // (omettendo error checking per brevità)
-    if (_ret <= 0) {
+    if (!receive_request_body(req, buf, sizeof(buf))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Richiesta non valida");
         return ESP_FAIL;
     }
-    buf[_ret] = '\0'; // Garantisce che il parsing non legga oltre i dati ricevuti
     
     // AZZERA PRIMA DI SCRIVERE: garantisce che i vecchi caratteri non restino lì
     memset(g_device_config.ping_ip, 0, sizeof(g_device_config.ping_ip));
@@ -121,39 +229,44 @@ static esp_err_t form_hot_handler(httpd_req_t *req) {
 // Handler per parametri "Cold" (Richiede riavvio)
 static esp_err_t form_cold_handler(httpd_req_t *req) {
     char buf[256] = {0};
-    const int _remaining = req->content_len;
-    int _ret = _remaining;
-
-
-    if (_remaining >= sizeof(buf)) {
-        httpd_resp_send_500(req);
+    if (!receive_request_body(req, buf, sizeof(buf))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Richiesta non valida");
         return ESP_FAIL;
     }
-
-    // Legge il body della richiesta
-    _ret = httpd_req_recv(req, buf, _remaining);
-    if (_ret <= 0) {
-        return ESP_FAIL;
-    }
-    buf[_ret] = '\0'; // Termina la stringa
-
-    ESP_LOGI(TAG, "Ricevuto POST: %s", buf);
 
     app_config_t config;
     memcpy(&config, &g_device_config, sizeof(app_config_t));
-    memset(config.wifi_ssid, 0, sizeof(config.wifi_ssid));
-    memset(config.wifi_password, 0, sizeof(config.wifi_password));
-    
-    // Estrae i valori dai campi del form
-    httpd_query_key_value(buf, "ssid", config.wifi_ssid, sizeof(config.wifi_ssid));
-    httpd_query_key_value(buf, "pass", config.wifi_password, sizeof(config.wifi_password));
-    //httpd_query_key_value(buf, "ping_ip", config.ping_ip, sizeof(config.ping_ip));
-    //httpd_query_key_value(buf, "ping_host", config.ping_host, sizeof(config.ping_host));
+    char login_ixp_string[16] = "-1";
+    httpd_query_key_value(buf, "login_ixp", login_ixp_string, sizeof(login_ixp_string));
 
-    // Sostituisce i "+" con gli spazi (codifica URL)
-    // Utile se l'SSID contiene spazi
-    for(int i=0; i<strlen(config.wifi_ssid); i++) {
-        if(config.wifi_ssid[i] == '+') config.wifi_ssid[i] = ' ';
+    char *end = NULL;
+    const long requested_ixp = strtol(login_ixp_string, &end, 10);
+    if (end == login_ixp_string || *end != '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Indice hotspot non valido");
+        return ESP_FAIL;
+    }
+
+    if (requested_ixp >= 0) {
+        if (!login_save_set_current(&config.wifi_logins, (size_t)requested_ixp)) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Hotspot non disponibile");
+            return ESP_FAIL;
+        }
+    } else {
+        wifi_login_t new_login = {0};
+        httpd_query_key_value(buf, "ssid", new_login.ssid, sizeof(new_login.ssid));
+        httpd_query_key_value(buf, "pass", new_login.password, sizeof(new_login.password));
+
+        for (size_t i = 0; i < strlen(new_login.ssid); ++i) {
+            if (new_login.ssid[i] == '+') new_login.ssid[i] = ' ';
+        }
+        if (new_login.ssid[0] == '\0') {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Inserire il nuovo SSID");
+            return ESP_FAIL;
+        }
+
+        login_save_add(&config.wifi_logins, &new_login);
+        login_save_set_current(&config.wifi_logins,
+                               login_save_length(&config.wifi_logins) - 1U);
     }
 
     // Salva nella memoria NVS
@@ -294,6 +407,7 @@ static esp_err_t diag_download_csv_handler(httpd_req_t *req) {
 
 esp_err_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.stack_size = 8192;
     
     // Inizializza e avvia il server
     if (httpd_start(&server, &config) == ESP_OK) {

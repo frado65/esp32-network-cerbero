@@ -221,6 +221,10 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
 }
 
 void wifi_init_sta(void) {
+    wifi_login_t current_login = {0};
+    const bool has_current_login = login_save_get_current(&g_device_config.wifi_logins,
+                                                          &current_login);
+
     // Configura il pin per il pulsante Normalmente Aperto per forzare l'Access Point.
     // Il pulsante chiude verso massa (GND) quindi usiamo PULLUP interno. Stato premuto = 0 (LOW).
     gpio_config_t io_conf_btn = {
@@ -282,14 +286,14 @@ void wifi_init_sta(void) {
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, &instance_any_id));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &instance_got_ip));
 
-    if (force_ap || strlen(g_device_config.wifi_ssid) == 0) {
+    if (force_ap || !has_current_login || strlen(current_login.ssid) == 0) {
         if (force_ap) {
             ESP_LOGW(TAG, "Avvio forzato in modalita' Access Point via hardware.");
         } else {
             ESP_LOGW(TAG, "Nessun SSID configurato. Avvio in modalita' Access Point.");
         }
         
-        // Interfaccia virtuale dedicata all'AP
+        // Interfaccia virtuale dedicata all'AP (Access Point)
         esp_netif_create_default_wifi_ap();
 
         wifi_config_t ap_config = {
@@ -311,7 +315,7 @@ void wifi_init_sta(void) {
         ESP_LOGI(TAG, "Access Point avviato. Collegati a '%s' e apri 192.168.4.1", AP_SSID);
         
     } else {
-        ESP_LOGI(TAG, "SSID trovato: %s. Avvio in modalita' Station.", g_device_config.wifi_ssid);
+        ESP_LOGI(TAG, "SSID trovato: %s. Avvio in modalita' Station.", current_login.ssid);
 
         // Interfaccia virtuale dedicata alla Station
         esp_netif_create_default_wifi_sta(); 
@@ -322,8 +326,8 @@ void wifi_init_sta(void) {
             },
         };
         
-        strncpy((char *)wifi_config.sta.ssid, g_device_config.wifi_ssid, sizeof(wifi_config.sta.ssid));
-        strncpy((char *)wifi_config.sta.password, g_device_config.wifi_password, sizeof(wifi_config.sta.password));        
+        strncpy((char *)wifi_config.sta.ssid, current_login.ssid, sizeof(wifi_config.sta.ssid));
+        strncpy((char *)wifi_config.sta.password, current_login.password, sizeof(wifi_config.sta.password));
 
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA)); 
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));

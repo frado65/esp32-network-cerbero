@@ -25,6 +25,7 @@ esp_err_t config_load(app_config_t *config) {
 
     // Pulisce la struct con valori di default vuoti in caso di fallimento
     memset(config, 0, sizeof(app_config_t));
+    login_save_init(&config->wifi_logins);
 
     // Apre la partizione NVS in lettura (i namespace sono delle specie di cartelle):
     err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &my_handle);
