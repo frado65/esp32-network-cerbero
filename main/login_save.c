@@ -4,8 +4,11 @@
 
 #include "freertos/FreeRTOS.h"
 
+/* Spinlock FreeRTOS condiviso da tutte le operazioni sul deposito. Evita che
+ * task HTTP, Wi-Fi e diagnostica leggano la struttura mentre viene modificata. */
 static portMUX_TYPE s_login_lock = portMUX_INITIALIZER_UNLOCKED;
 
+/* Traduce un indice logico (0 = più vecchio) nella cella reale dell'array. */
 static size_t physical_index(const wifi_login_store_t *store, size_t logical_index)
 {
     return (store->head + logical_index) % LOGIN_SAVE_CAPACITY;
@@ -13,6 +16,8 @@ static size_t physical_index(const wifi_login_store_t *store, size_t logical_ind
 
 static void copy_login(wifi_login_t *destination, const wifi_login_t *source)
 {
+    /* La copia finale forza sempre la terminazione delle stringhe, proteggendo
+     * strcmp/strlen anche se il chiamante ha fornito campi completamente pieni. */
     memcpy(destination, source, sizeof(*destination));
     destination->ssid[WIFI_SSID_BUFFER_SIZE - 1U] = '\0';
     destination->password[WIFI_PASSWORD_BUFFER_SIZE - 1U] = '\0';
@@ -24,6 +29,7 @@ void login_save_init(wifi_login_store_t *store)
         return;
     }
 
+    /* La sezione critica rende atomico il reset dell'intera struttura. */
     portENTER_CRITICAL(&s_login_lock);
     memset(store, 0, sizeof(*store));
     store->current_ixp = LOGIN_SAVE_NOT_FOUND;
@@ -39,12 +45,15 @@ bool login_save_add(wifi_login_store_t *store, const wifi_login_t *login)
     portENTER_CRITICAL(&s_login_lock);
 
     if (store->count < LOGIN_SAVE_CAPACITY) {
+        /* Finché c'è spazio si scrive subito dopo l'elemento più recente. */
         copy_login(&store->entries[physical_index(store, store->count)], login);
         ++store->count;
         if (store->current_ixp == LOGIN_SAVE_NOT_FOUND) {
             store->current_ixp = 0;
         }
     } else {
+        /* A buffer pieno la cella head è la più vecchia: viene rimpiazzata e
+         * head avanza. Anche l'indice selezionato viene riallineato. */
         copy_login(&store->entries[store->head], login);
         store->head = (store->head + 1U) % LOGIN_SAVE_CAPACITY;
         if (store->current_ixp == 0) {
@@ -154,6 +163,8 @@ bool login_save_remove(wifi_login_store_t *store, size_t ixp)
         return false;
     }
 
+    /* Compatta gli indici logici successivi; physical_index gestisce
+     * automaticamente l'eventuale passaggio dalla fine all'inizio dell'array. */
     for (size_t current = ixp; current + 1U < store->count; ++current) {
         store->entries[physical_index(store, current)] =
             store->entries[physical_index(store, current + 1U)];

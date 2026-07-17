@@ -5,16 +5,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Numero massimo di credenziali conservate e spazio riservato alle stringhe,
+ * incluso il terminatore NUL richiesto dalle funzioni C. */
 #define LOGIN_SAVE_CAPACITY       10U
 #define WIFI_SSID_BUFFER_SIZE     32U
 #define WIFI_PASSWORD_BUFFER_SIZE 64U
 #define LOGIN_SAVE_NOT_FOUND      (-1)
 
 typedef struct {
+    /* Una coppia di credenziali Wi-Fi completa e autosufficiente. */
     char ssid[WIFI_SSID_BUFFER_SIZE];
     char password[WIFI_PASSWORD_BUFFER_SIZE];
 } wifi_login_t;
 
+/* Buffer circolare delle credenziali: head indica l'elemento fisico più
+ * vecchio, count quanti elementi sono validi e current_ixp l'indice logico
+ * selezionato dall'utente (non l'indice fisico dell'array). */
 typedef struct {
     wifi_login_t entries[LOGIN_SAVE_CAPACITY];
     size_t head;
@@ -54,7 +60,9 @@ int32_t login_save_find(const wifi_login_store_t *store, const char *ssid);
  */
 bool login_save_get(const wifi_login_store_t *store, size_t ixp, wifi_login_t *out_login);
 
-/** Selects the login at logical index ixp as the active Wi-Fi login. */
+/** Selects the login at logical index ixp as the active Wi-Fi login.
+ *  L'indice è relativo all'elemento più vecchio, quindi resta indipendente
+ *  dalla disposizione fisica usata dal buffer circolare. */
 bool login_save_set_current(wifi_login_store_t *store, size_t ixp);
 
 /** Copies the currently selected login into out_login. */

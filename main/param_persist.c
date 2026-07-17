@@ -5,6 +5,7 @@
 #include <string.h>
 
 static const char *TAG = "PERSIST";
+/* Namespace e chiave formano l'indirizzo logico del blob dentro la NVS. */
 static const char *NVS_NAMESPACE = "storage";
 static const char *NVS_KEY = "app_config";
 
@@ -20,6 +21,8 @@ esp_err_t config_nvs_init(void) {
 }
 
 esp_err_t config_load(app_config_t *config) {
+    /* L'handle rappresenta una sessione aperta sul namespace NVS e deve essere
+     * sempre chiuso con nvs_close quando l'apertura riesce. */
     nvs_handle_t my_handle;
     esp_err_t err;
 
@@ -33,6 +36,8 @@ esp_err_t config_load(app_config_t *config) {
 
     size_t required_size = sizeof(app_config_t);
     // Lettura del blocco di memoria:
+    /* required_size è sia input (capacità disponibile) sia output (dimensione
+     * effettivamente letta/richiesta) secondo il contratto di nvs_get_blob. */
     err = nvs_get_blob(my_handle, NVS_KEY, config, &required_size);
     
     if (err == ESP_OK) {
@@ -50,11 +55,14 @@ esp_err_t config_save(const app_config_t *config) {
     nvs_handle_t my_handle;
     esp_err_t err;
 
+    /* La modalità READWRITE è necessaria per aggiornare il blob. */
     err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &my_handle);
     if (err != ESP_OK) return err;
 
     err = nvs_set_blob(my_handle, NVS_KEY, config, sizeof(app_config_t));
     if (err == ESP_OK) {
+        /* nvs_set_blob prepara la modifica; nvs_commit la rende persistente
+         * nella Flash e resistente a riavvii o perdita di alimentazione. */
         err = nvs_commit(my_handle);
         ESP_LOGI(TAG, "Configurazione salvata su NVS");
     }

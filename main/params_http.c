@@ -13,10 +13,13 @@
 
 #include "event_log.h"
 
+/* Il modulo espone pagine di configurazione e diagnostica. Gli handler sono
+ * eseguiti nel task interno di esp_http_server e restituiscono esp_err_t. */
 #define BUFFER_SIZE 5120
 #define LOGIN_OPTIONS_BUFFER_SIZE 2304
 
 static const char *TAG = "HTTP_SERVER";
+/* Handle opaco del server: NULL indica che non esiste un'istanza attiva. */
 static httpd_handle_t server = NULL;
 
 extern app_config_t g_device_config;
@@ -32,6 +35,8 @@ static const char favicon_svg[] =
 
 // Template HTML: i %s verranno sostituiti a runtime con i valori attuali
 static const char* form_template = 
+    /* I tre segnaposto %s vengono sostituiti con IP, host e lista degli SSID;
+     * eventuali '%' letterali nel template devono essere scritti come '%%'. */
     "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Configurazione</title>"
     "<style>"
     "body{font-family:sans-serif;margin:20px;}"
@@ -61,6 +66,8 @@ static const char* form_template =
 
 static size_t html_escape(const char *source, char *destination, size_t destination_size)
 {
+    /* Sostituisce i caratteri con significato HTML per impedire che un SSID
+     * venga interpretato come markup nella pagina di configurazione. */
     size_t written = 0;
 
     if (destination_size == 0U) {
@@ -98,6 +105,8 @@ static size_t html_escape(const char *source, char *destination, size_t destinat
 
 static bool receive_request_body(httpd_req_t *req, char *buffer, size_t buffer_size)
 {
+    /* content_len proviene dall'header HTTP. Si riserva sempre un byte per il
+     * terminatore NUL, necessario al successivo parsing come query string. */
     if ((size_t)req->content_len >= buffer_size) {
         return false;
     }
@@ -107,6 +116,8 @@ static bool receive_request_body(httpd_req_t *req, char *buffer, size_t buffer_s
         const int result = httpd_req_recv(req, buffer + received,
                                           (size_t)req->content_len - received);
         if (result == HTTPD_SOCK_ERR_TIMEOUT) {
+            /* Un timeout temporaneo non chiude necessariamente la connessione:
+             * si riprova finché arriva tutto il body dichiarato. */
             continue;
         }
         if (result <= 0) {
@@ -122,6 +133,8 @@ static bool receive_request_body(httpd_req_t *req, char *buffer, size_t buffer_s
 
 // Converte un byte in una stringa di 8 caratteri binari + \0
 static void byte_to_binary_str(uint8_t byte, char *out_str) {
+    /* Visita i bit dal più significativo al meno significativo e genera
+     * esattamente otto caratteri, seguiti dal terminatore di stringa. */
     for (int i = 7; i >= 0; i--) {
         out_str[7 - i] = (byte & (1 << i)) ? '1' : '0';
     }
@@ -139,6 +152,8 @@ static esp_err_t form_get_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
+    /* Il buffer è sull'heap per non consumare lo stack limitato del task HTTP;
+     * calloc lo inizializza anche come stringa vuota valida. */
     char *login_options = calloc(1, LOGIN_OPTIONS_BUFFER_SIZE);
     if (login_options == NULL) {
         ESP_LOGE(TAG, "Impossibile allocare memoria per le opzioni WiFi");
@@ -161,6 +176,7 @@ static esp_err_t form_get_handler(httpd_req_t *req) {
     size_t options_length = (size_t)initial_result;
 
     const size_t login_count = login_save_length(&g_device_config.wifi_logins);
+    /* Ogni credenziale salvata diventa una voce della select HTML. */
     for (size_t ixp = 0; ixp < login_count; ++ixp) {
         wifi_login_t login = {0};
         char escaped_ssid[(WIFI_SSID_BUFFER_SIZE * 6U) + 1U];
@@ -188,6 +204,8 @@ static esp_err_t form_get_handler(httpd_req_t *req) {
             );
 
     // Invia la pagina popolata
+    /* HTTPD_RESP_USE_STRLEN delega al server il calcolo della lunghezza fino
+     * al terminatore NUL, evitando di mantenere un secondo contatore. */
     httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
     
     // Libera la memoria dinamica
@@ -198,6 +216,8 @@ static esp_err_t form_get_handler(httpd_req_t *req) {
 
 // Handler per parametri "Hot" (Applicazione immediata)
 static esp_err_t form_hot_handler(httpd_req_t *req) {
+    /* I parametri "hot" modificano subito i target diagnostici e non
+     * richiedono il riavvio della rete. */
     char buf[256] = {0};
 
     if (!receive_request_body(req, buf, sizeof(buf))) {
@@ -210,6 +230,8 @@ static esp_err_t form_hot_handler(httpd_req_t *req) {
     memset(g_device_config.ping_host, 0, sizeof(g_device_config.ping_host));
 
     // Aggiorna la struttura globale in RAM
+    /* Il body di un form URL-encoded ha la stessa forma di una query string;
+     * questa API estrae per nome i valori nei buffer con limite di capacità. */
     httpd_query_key_value(buf, "ping_ip", g_device_config.ping_ip, sizeof(g_device_config.ping_ip));
     httpd_query_key_value(buf, "ping_host", g_device_config.ping_host, sizeof(g_device_config.ping_host));
 
@@ -228,6 +250,8 @@ static esp_err_t form_hot_handler(httpd_req_t *req) {
 
 // Handler per parametri "Cold" (Richiede riavvio)
 static esp_err_t form_cold_handler(httpd_req_t *req) {
+    /* Si lavora su una copia: la configurazione globale resta coerente fino
+     * al salvataggio e al successivo riavvio. */
     char buf[256] = {0};
     if (!receive_request_body(req, buf, sizeof(buf))) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Richiesta non valida");
@@ -240,6 +264,8 @@ static esp_err_t form_cold_handler(httpd_req_t *req) {
     httpd_query_key_value(buf, "login_ixp", login_ixp_string, sizeof(login_ixp_string));
 
     char *end = NULL;
+    /* strtol consente di distinguere un indice numerico valido da input
+     * malformato controllando sia end sia l'eventuale testo residuo. */
     const long requested_ixp = strtol(login_ixp_string, &end, 10);
     if (end == login_ixp_string || *end != '\0') {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Indice hotspot non valido");
@@ -273,6 +299,7 @@ static esp_err_t form_cold_handler(httpd_req_t *req) {
     config_save(&config);    
     httpd_resp_send(req, "<h2>Salvato. Riavvio in corso...</h2>", HTTPD_RESP_USE_STRLEN);
     
+    /* Lascia tempo allo stack TCP di trasmettere la risposta prima del reset. */
     vTaskDelay(pdMS_TO_TICKS(1000));
     esp_restart();
     return ESP_OK;
@@ -315,6 +342,8 @@ static esp_err_t diag_page_handler(httpd_req_t *req) {
         " | <a href='/params'>Params</a>"
         "<br>");
         
+    /* Si mostra solo una finestra recente, mentre il download CSV comprende
+     * l'intero contenuto del registro circolare. */
     uint16_t count = diag_get_count();
     len += snprintf(resp_str+len, BUFFER_SIZE - len, 
         "<br>Count=%d (show last 10 events only)<br><br><table><tr><th>#</th><th>Timestamp</th><th>Error Mask (Bin)</th></tr>", count); 
@@ -330,6 +359,8 @@ static esp_err_t diag_page_handler(httpd_req_t *req) {
                 // 1. Conversione del Timestamp
                 char time_buf[24];
                 time_t t = (time_t)entry.timestamp; // Se è in millisecondi, fai: entry.timestamp / 1000;
+                /* localtime applica il fuso configurato da SNTP; strftime
+                 * serializza poi l'orario nel formato usato dalla tabella. */
                 struct tm *tm_info = localtime(&t);
                 strftime(time_buf, sizeof(time_buf), "%Y-%m-%d_%H-%m-%S", tm_info);
 
@@ -347,6 +378,7 @@ static esp_err_t diag_page_handler(httpd_req_t *req) {
     // Chiusura tag HTML
     snprintf(resp_str + len, BUFFER_SIZE - len, "</table></body></html>");
 
+    /* Il Content-Type permette al browser di interpretare la risposta come HTML. */
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
     
@@ -367,6 +399,8 @@ static esp_err_t diag_download_csv_handler(httpd_req_t *req) {
 
     // Forza il browser a scaricare il contenuto come file invece di visualizzarlo
     httpd_resp_set_type(req, "text/csv");
+    /* Content-Disposition attachment chiede al browser di proporre il file
+     * come download usando il nome indicato. */
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=diagnostica_cerbero.csv");
 
     int len = snprintf(csv_buf, DOWNLOAD_BUFFER_SIZE, "Indice;Timestamp;ErrorMask\n");
@@ -406,12 +440,16 @@ static esp_err_t diag_download_csv_handler(httpd_req_t *req) {
 
 
 esp_err_t start_webserver(void) {
+    /* HTTPD_DEFAULT_CONFIG fornisce porta, priorità e limiti standard. Lo
+     * stack viene ampliato perché gli handler formattano pagine con newlib. */
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
     
     // Inizializza e avvia il server
     if (httpd_start(&server, &config) == ESP_OK) {
-httpd_uri_t uri_get = {
+        /* Ogni httpd_uri_t associa metodo + percorso a una callback handler;
+         * user_ctx resta NULL perché gli handler usano lo stato globale. */
+        httpd_uri_t uri_get = {
             .uri       = "/params",
             .method    = HTTP_GET,
             .handler   = form_get_handler,
@@ -469,6 +507,7 @@ httpd_uri_t uri_get = {
 
 void stop_webserver(void) {
     if (server) {
+        /* httpd_stop arresta il task interno e invalida l'handle conservato. */
         httpd_stop(server);
         server = NULL;
     }

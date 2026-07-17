@@ -11,6 +11,9 @@
 #define DIAG_BIT_WAN      (1 << 4)
 #define DIAG_BIT_DNS      (1 << 5)
 
+/* Ogni costante occupa un bit distinto: più anomalie possono quindi essere
+ * rappresentate contemporaneamente combinandole con l'operatore OR (|). */
+
 /**
  * timestamp: timestamp dell'evento.
  * error_mask: flag del tipo di evento:
@@ -34,5 +37,5 @@ bool diag_extract(uint16_t index, DiagnosisEntry *out_entry);
 
 void diag_clear(void);
 
+// Restituisce quanti record validi sono attualmente disponibili nel buffer.
 uint16_t diag_get_count(void);
-
