@@ -14,6 +14,7 @@
 #include "sntp.h"
 #include "status_indicator.h"
 #include "wifi_manager.h"
+#include "display.h"
 
 #define LOOP_TIME_MS 10000
 
@@ -140,6 +141,7 @@ static void diagnostics_task(void *parameters)
         }
 
         record_if_changed(&diagnosis);
+        display_draw_diagnosis(&diagnosis);
 
         TickType_t elapsed = xTaskGetTickCount() - cycle_start;
         int32_t delay_ms = LOOP_TIME_MS - (elapsed * portTICK_PERIOD_MS);

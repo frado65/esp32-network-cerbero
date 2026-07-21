@@ -35,7 +35,7 @@ void print_time(const char *tag, time_t *p_now)
     struct tm _timeinfo;
     /* time aggiorna l'epoch; localtime_r produce una struct tm usando una
      * variante rientrante, sicura rispetto all'uso concorrente tra task. */
-    time(p_now);
+    //time(p_now);
     localtime_r(p_now, &_timeinfo);
 
     // _timeinfo.tm_hour, _timeinfo.tm_min, _timeinfo.tm_sec contengono l'ora corretta
