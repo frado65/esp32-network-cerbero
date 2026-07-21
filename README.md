@@ -118,5 +118,8 @@ Il sistema fornisce un feedback immediato su due canali: LED per lo stato visivo
 - Fare in modo che quando si salvano i parametri venga ricaricata la pagina di settings - RISTRUTTURATO PAGINE WEB.
 - 
 
+# Immagini varie
+![Visualizzazione stati di errore di rete](2026-07-21_17-10-23.png)
+
 ---
 ---
