@@ -19,13 +19,13 @@
 #define LOGIN_OPTIONS_BUFFER_SIZE 2304
 
 static const char *TAG = "HTTP_SERVER";
-/* Handle opaco del server: NULL indica che non esiste un'istanza attiva. */
-static httpd_handle_t server = NULL;
+/* Handle opaco del g_server: NULL indica che non esiste un'istanza attiva. */
+static httpd_handle_t g_server = NULL;
 
 extern app_config_t g_device_config;
 
 // Una favicon SVG leggera e definita (Smile moderno)
-static const char favicon_svg[] = 
+static const char g_favicon_svg[] = 
     "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
     "<circle cx='12' cy='12' r='10' fill='#FFD43B'/>"
     "<circle cx='8.5' cy='9.5' r='1.5' fill='#2B2D42'/>"
@@ -34,7 +34,7 @@ static const char favicon_svg[] =
     "</svg>";
 
 // Template HTML: i %s verranno sostituiti a runtime con i valori attuali
-static const char* form_template = 
+static const char* g_form_template = 
     /* I tre segnaposto %s vengono sostituiti con IP, host e lista degli SSID;
      * eventuali '%' letterali nel template devono essere scritti come '%%'. */
     "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Configurazione</title>"
@@ -68,39 +68,39 @@ static size_t html_escape(const char *source, char *destination, size_t destinat
 {
     /* Sostituisce i caratteri con significato HTML per impedire che un SSID
      * venga interpretato come markup nella pagina di configurazione. */
-    size_t written = 0;
+    size_t _written = 0;
 
     if (destination_size == 0U) {
         return 0U;
     }
 
     while (*source != '\0') {
-        const char *replacement = NULL;
+        const char *_replacement = NULL;
         switch (*source) {
-            case '&': replacement = "&amp;"; break;
-            case '<': replacement = "&lt;"; break;
-            case '>': replacement = "&gt;"; break;
-            case '\"': replacement = "&quot;"; break;
-            case '\'': replacement = "&#39;"; break;
+            case '&': _replacement = "&amp;"; break;
+            case '<': _replacement = "&lt;"; break;
+            case '>': _replacement = "&gt;"; break;
+            case '\"': _replacement = "&quot;"; break;
+            case '\'': _replacement = "&#39;"; break;
             default: break;
         }
 
-        const size_t chunk_size = replacement != NULL ? strlen(replacement) : 1U;
-        if (written + chunk_size >= destination_size) {
+        const size_t _chunk_size = _replacement != NULL ? strlen(_replacement) : 1U;
+        if (_written + _chunk_size >= destination_size) {
             break;
         }
 
-        if (replacement != NULL) {
-            memcpy(destination + written, replacement, chunk_size);
+        if (_replacement != NULL) {
+            memcpy(destination + _written, _replacement, _chunk_size);
         } else {
-            destination[written] = *source;
+            destination[_written] = *source;
         }
-        written += chunk_size;
+        _written += _chunk_size;
         ++source;
     }
 
-    destination[written] = '\0';
-    return written;
+    destination[_written] = '\0';
+    return _written;
 }
 
 static bool receive_request_body(httpd_req_t *req, char *buffer, size_t buffer_size)
@@ -111,22 +111,22 @@ static bool receive_request_body(httpd_req_t *req, char *buffer, size_t buffer_s
         return false;
     }
 
-    size_t received = 0;
-    while (received < (size_t)req->content_len) {
-        const int result = httpd_req_recv(req, buffer + received,
-                                          (size_t)req->content_len - received);
-        if (result == HTTPD_SOCK_ERR_TIMEOUT) {
+    size_t _received = 0;
+    while (_received < (size_t)req->content_len) {
+        const int _result = httpd_req_recv(req, buffer + _received,
+                                          (size_t)req->content_len - _received);
+        if (_result == HTTPD_SOCK_ERR_TIMEOUT) {
             /* Un timeout temporaneo non chiude necessariamente la connessione:
              * si riprova finché arriva tutto il body dichiarato. */
             continue;
         }
-        if (result <= 0) {
+        if (_result <= 0) {
             return false;
         }
-        received += (size_t)result;
+        _received += (size_t)_result;
     }
 
-    buffer[received] = '\0';
+    buffer[_received] = '\0';
     return true;
 }
 
@@ -145,8 +145,8 @@ static void byte_to_binary_str(uint8_t byte, char *out_str) {
 // Handler per la richiesta GET (Mostra la pagina con i dati compilati)
 static esp_err_t form_get_handler(httpd_req_t *req) {
     // Alloca BUFFER_SIZE byte per contenere la pagina completa
-    char *resp_str = malloc(BUFFER_SIZE);
-    if (resp_str == NULL) {
+    char *_resp_str = malloc(BUFFER_SIZE);
+    if (_resp_str == NULL) {
         ESP_LOGE(TAG, "Impossibile allocare memoria per la pagina HTML");
         httpd_resp_send_500(req);
         return ESP_FAIL;
@@ -157,7 +157,7 @@ static esp_err_t form_get_handler(httpd_req_t *req) {
     char *login_options = calloc(1, LOGIN_OPTIONS_BUFFER_SIZE);
     if (login_options == NULL) {
         ESP_LOGE(TAG, "Impossibile allocare memoria per le opzioni WiFi");
-        free(resp_str);
+        free(_resp_str);
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
@@ -169,7 +169,7 @@ static esp_err_t form_get_handler(httpd_req_t *req) {
     if (initial_result < 0 || initial_result >= LOGIN_OPTIONS_BUFFER_SIZE) {
         ESP_LOGE(TAG, "Buffer delle opzioni WiFi insufficiente");
         free(login_options);
-        free(resp_str);
+        free(_resp_str);
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
@@ -185,32 +185,32 @@ static esp_err_t form_get_handler(httpd_req_t *req) {
         }
         html_escape(login.ssid, escaped_ssid, sizeof(escaped_ssid));
 
-        const int result = snprintf(
+        const int _result = snprintf(
             login_options + options_length, LOGIN_OPTIONS_BUFFER_SIZE - options_length,
             "<option value='%u'%s>%s</option>", (unsigned)ixp,
             g_device_config.wifi_logins.current_ixp == (int32_t)ixp ? " selected" : "",
             escaped_ssid);
-        if (result < 0 || (size_t)result >= LOGIN_OPTIONS_BUFFER_SIZE - options_length) {
+        if (_result < 0 || (size_t)_result >= LOGIN_OPTIONS_BUFFER_SIZE - options_length) {
             break;
         }
-        options_length += (size_t)result;
+        options_length += (size_t)_result;
     }
 
     // Inietta i valori attuali nel template HTML
-    snprintf(resp_str, BUFFER_SIZE, form_template, 
+    snprintf(_resp_str, BUFFER_SIZE, g_form_template, 
              g_device_config.ping_ip, 
              g_device_config.ping_host,
              login_options
             );
 
     // Invia la pagina popolata
-    /* HTTPD_RESP_USE_STRLEN delega al server il calcolo della lunghezza fino
+    /* HTTPD_RESP_USE_STRLEN delega al g_server il calcolo della lunghezza fino
      * al terminatore NUL, evitando di mantenere un secondo contatore. */
-    httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
+    httpd_resp_send(req, _resp_str, HTTPD_RESP_USE_STRLEN);
     
     // Libera la memoria dinamica
     free(login_options);
-    free(resp_str);
+    free(_resp_str);
     return ESP_OK;
 }
 
@@ -311,7 +311,7 @@ static esp_err_t favicon_get_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "image/svg+xml");
     
     // Inviamo la stringa usando strlen visto che è testo puro
-    httpd_resp_send(req, favicon_svg, HTTPD_RESP_USE_STRLEN);
+    httpd_resp_send(req, g_favicon_svg, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
@@ -320,14 +320,14 @@ static esp_err_t diag_page_handler(httpd_req_t *req) {
     // Allocazione dinamica per contenere la pagina HTML con la tabella
     // 2048 o più a seconda di quanti tag HTML vuoi inserire
     
-    char *resp_str = malloc(BUFFER_SIZE);
-    if (resp_str == NULL) {
+    char *_resp_str = malloc(BUFFER_SIZE);
+    if (_resp_str == NULL) {
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
 
     // Inizio pagina HTML con lo script di refresh automatico sul click
-    int len = snprintf(resp_str, BUFFER_SIZE,
+    int len = snprintf(_resp_str, BUFFER_SIZE,
         "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Diagnostica</title>"
         "<style>body{font-family:sans-serif;margin:20px;} table{width:100%%;border-collapse:collapse;} "
         "th,td{border:1px solid #ccc;padding:8px;text-align:left;} th{background:#f2f2f2;}</style></head>"
@@ -345,10 +345,10 @@ static esp_err_t diag_page_handler(httpd_req_t *req) {
     /* Si mostra solo una finestra recente, mentre il download CSV comprende
      * l'intero contenuto del registro circolare. */
     uint16_t count = diag_get_count();
-    len += snprintf(resp_str+len, BUFFER_SIZE - len, 
+    len += snprintf(_resp_str+len, BUFFER_SIZE - len, 
         "<br>Count=%d (show last 10 events only)<br><br><table><tr><th>#</th><th>Timestamp</th><th>Error Mask (Bin)</th></tr>", count); 
     if (count == 0) {
-        len += snprintf(resp_str + len, BUFFER_SIZE - len, "<tr><td colspan='3'>Nessun dato registrato.</td></tr>");
+        len += snprintf(_resp_str + len, BUFFER_SIZE - len, "<tr><td colspan='3'>Nessun dato registrato.</td></tr>");
     } else {
         const uint16_t _start = count > 10 ? count - 10 : 0; // massimo 10 righe
         for (uint16_t i = _start; i < count; i++) {
@@ -368,7 +368,7 @@ static esp_err_t diag_page_handler(httpd_req_t *req) {
                 char bin_buf[9];
                 byte_to_binary_str((uint8_t)(entry.error_mask & 0xFF), bin_buf);
                 
-                len += snprintf(resp_str + len, BUFFER_SIZE - len,
+                len += snprintf(_resp_str + len, BUFFER_SIZE - len,
                     "<tr><td>%d</td><td>%s</td><td><code>b%s</code></td></tr>",
                     i + 1, time_buf, bin_buf);
             }
@@ -376,13 +376,13 @@ static esp_err_t diag_page_handler(httpd_req_t *req) {
     }
 
     // Chiusura tag HTML
-    snprintf(resp_str + len, BUFFER_SIZE - len, "</table></body></html>");
+    snprintf(_resp_str + len, BUFFER_SIZE - len, "</table></body></html>");
 
     /* Il Content-Type permette al browser di interpretare la risposta come HTML. */
     httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
+    httpd_resp_send(req, _resp_str, HTTPD_RESP_USE_STRLEN);
     
-    free(resp_str);
+    free(_resp_str);
     return ESP_OK;
 }
 
@@ -445,8 +445,8 @@ esp_err_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
     
-    // Inizializza e avvia il server
-    if (httpd_start(&server, &config) == ESP_OK) {
+    // Inizializza e avvia il g_server
+    if (httpd_start(&g_server, &config) == ESP_OK) {
         /* Ogni httpd_uri_t associa metodo + percorso a una callback handler;
          * user_ctx resta NULL perché gli handler usano lo stato globale. */
         httpd_uri_t uri_get = {
@@ -455,7 +455,7 @@ esp_err_t start_webserver(void) {
             .handler   = form_get_handler,
             .user_ctx  = NULL
         };
-        httpd_register_uri_handler(server, &uri_get);
+        httpd_register_uri_handler(g_server, &uri_get);
 
         httpd_uri_t uri_hot = {
             .uri       = "/submit_hot",
@@ -463,7 +463,7 @@ esp_err_t start_webserver(void) {
             .handler   = form_hot_handler,
             .user_ctx  = NULL
         };
-        httpd_register_uri_handler(server, &uri_hot);
+        httpd_register_uri_handler(g_server, &uri_hot);
 
         httpd_uri_t uri_cold = {
             .uri       = "/submit_cold",
@@ -471,7 +471,7 @@ esp_err_t start_webserver(void) {
             .handler   = form_cold_handler,
             .user_ctx  = NULL
         };
-        httpd_register_uri_handler(server, &uri_cold);
+        httpd_register_uri_handler(g_server, &uri_cold);
 
         httpd_uri_t uri_favicon = {
             .uri       = "/favicon.ico",
@@ -479,7 +479,7 @@ esp_err_t start_webserver(void) {
             .handler   = favicon_get_handler,
             .user_ctx  = NULL
         };
-        httpd_register_uri_handler(server, &uri_favicon);
+        httpd_register_uri_handler(g_server, &uri_favicon);
 
         // URI per la visualizzazione della Tabella Diagnostica
         httpd_uri_t uri_diag = {
@@ -488,7 +488,7 @@ esp_err_t start_webserver(void) {
             .handler   = diag_page_handler,
             .user_ctx  = NULL
         };
-        httpd_register_uri_handler(server, &uri_diag);
+        httpd_register_uri_handler(g_server, &uri_diag);
 
         // URI per il download del CSV
         httpd_uri_t uri_diag_down = {
@@ -497,7 +497,7 @@ esp_err_t start_webserver(void) {
             .handler   = diag_download_csv_handler,
             .user_ctx  = NULL
         };
-        httpd_register_uri_handler(server, &uri_diag_down);
+        httpd_register_uri_handler(g_server, &uri_diag_down);
 
         ESP_LOGI(TAG, "Server HTTP avviato");
         return ESP_OK;
@@ -506,9 +506,9 @@ esp_err_t start_webserver(void) {
 }
 
 void stop_webserver(void) {
-    if (server) {
+    if (g_server) {
         /* httpd_stop arresta il task interno e invalida l'handle conservato. */
-        httpd_stop(server);
-        server = NULL;
+        httpd_stop(g_server);
+        g_server = NULL;
     }
 }

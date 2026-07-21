@@ -11,6 +11,7 @@
 #include "params_http.h"
 #include "sntp.h"
 #include "status_indicator.h"
+#include "display.h"
 
 #define AP_SSID "ESP32_Network-Cerbero"
 #define AP_PASS "netcer1357"
@@ -79,9 +80,12 @@ static bool force_ap_button_pressed(void)
     return false;
 }
 
+
 static esp_err_t start_access_point(void)
 {
-    esp_netif_create_default_wifi_ap();
+    // Recupera l'handle dell'interfaccia di rete AP
+    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
+
     wifi_config_t _ap_config = {
         .ap = {
             .ssid = AP_SSID,
@@ -97,9 +101,38 @@ static esp_err_t start_access_point(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &_ap_config));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(start_webserver());
-    ESP_LOGI(TAG, "Access Point avviato. Collegati a '%s' e apri 192.168.4.1", AP_SSID);
+
+    // Legge l'indirizzo IP assegnato alla scheda di rete dell'AP
+    esp_netif_ip_info_t _ip_info;
+    if (esp_netif_get_ip_info(ap_netif, &_ip_info) == ESP_OK) {
+        display_draw_access_point(AP_SSID, _ip_info);
+        ESP_LOGI(TAG, "Access Point avviato. Collegati a '%s' e apri " IPSTR, AP_SSID, IP2STR(&_ip_info.ip));
+    }
+
     return ESP_OK;
 }
+
+// static esp_err_t start_access_point(void)
+// {
+//     esp_netif_create_default_wifi_ap();
+//     wifi_config_t _ap_config = {
+//         .ap = {
+//             .ssid = AP_SSID,
+//             .ssid_len = sizeof(AP_SSID) - 1U,
+//             .channel = 1,
+//             .password = AP_PASS,
+//             .max_connection = 4,
+//             .authmode = WIFI_AUTH_WPA2_PSK
+//         },
+//     };
+
+//     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+//     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &_ap_config));
+//     ESP_ERROR_CHECK(esp_wifi_start());
+//     ESP_ERROR_CHECK(start_webserver());
+//     ESP_LOGI(TAG, "Access Point avviato. Collegati a '%s' e apri 192.168.4.1", AP_SSID);
+//     return ESP_OK;
+// }
 
 static esp_err_t start_station(const wifi_login_t *login)
 {

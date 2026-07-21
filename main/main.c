@@ -9,6 +9,7 @@
 #include "status_indicator.h"
 #include "system_utils.h"
 #include "wifi_manager.h"
+ #include "display.h"
 
 /* main.c è il composition root dell'applicazione: inizializza i servizi e ne
  * collega le dipendenze, lasciando l'implementazione ai moduli specializzati. */
@@ -18,6 +19,33 @@ static const char *TAG = "main";
 /* È mantenuta globale perché gli handler HTTP devono aggiornare la stessa
  * istanza letta dal task diagnostico. */
 app_config_t g_device_config;
+
+void initialize_display(void) {
+    ESP_LOGI(TAG, "Inizializzazione I2C e Display SSD1306 ...");
+    
+    if (display_init() == ESP_OK) {
+        ESP_LOGI(TAG, "Display inizializzato con successo!");
+    } else {
+        ESP_LOGE(TAG, "Errore di inizializzazione del display.");
+        return;
+    }
+
+    // Pulisce la memoria RAM del display da artefatti di boot
+    display_clear();
+
+    // Scrive testo su diverse pagine (righe)
+    // Page 0 (prima riga), Colonna 0
+    display_draw_text(0, 0, "ESP32-C3 Pronto", NULL);
+    
+    // Page 2, spostato un po' più al centro
+    display_draw_text(2, 10, "Ciao Franco!", NULL);
+    
+    // Page 5
+    display_draw_text(5, 0, "Test I2C SSD1306", NULL);
+    
+    // Page 7 (ultima riga)
+    display_draw_text(7, 0, "-> Sistema OK <-", NULL);
+}
 
 /* Prepara l'orologio nello stesso stato di test usato dal progetto originale,
  * così il task diagnostico può verificare l'avvenuta sincronizzazione SNTP. */
@@ -43,7 +71,10 @@ static void initialize_test_clock(void)
 // Entry point standard di ESP-IDF (su FreeRTOS corrisponde ad un task generato internamente all'avvio)
 void app_main(void)
 {
-    ESP_LOGI(TAG, "Starting sequential diagnostics on ESP32-C3...");
+    ESP_LOGI(TAG, "Initializing display ...");
+    initialize_display();
+
+    ESP_LOGI(TAG, "Starting sequential diagnostics on ESP32-C3 ...");
     initialize_test_clock();
 
     // 1. Inizializza il file system NVS

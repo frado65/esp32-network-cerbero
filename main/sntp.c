@@ -39,8 +39,8 @@ void print_time(const char *tag, time_t *p_now)
     localtime_r(p_now, &_timeinfo);
 
     // _timeinfo.tm_hour, _timeinfo.tm_min, _timeinfo.tm_sec contengono l'ora corretta
-    char strftime_buf[64];
+    char _strftime_buf[64];
     /* strftime converte i campi numerici di struct tm in testo leggibile. */
-    strftime(strftime_buf, sizeof(strftime_buf), "%c", &_timeinfo);
-    ESP_LOGI(tag, "Ora attuale: %s", strftime_buf);
+    strftime(_strftime_buf, sizeof(_strftime_buf), "%c", &_timeinfo);
+    ESP_LOGI(tag, "Ora attuale: %s", _strftime_buf);
 }
