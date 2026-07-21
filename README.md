@@ -48,6 +48,8 @@ Nb: a volte è poi bene fare un `fullclean`.
 
 Un watchdog hardware standalone basato su ESP32 e ESP-IDF per il monitoraggio continuo e multilivello dello stato della rete.
 
+![Immagine del AGGEGGIO!](2026-07-21_16-57-34.png)
+
 Invece di limitarsi a verificare la presenza del segnale Wi-Fi, "Cerbero" sonda attivamente la catena di connettività a tre livelli distinti: il router locale (LAN), l'accesso a Internet (WAN) e la risoluzione dei nomi a dominio (DNS). Fornisce un feedback visivo immediato tramite LED per diagnosticare a colpo d'occhio l'origine di un disservizio di rete.
 
 ## 🎯 Obiettivi del Progetto
