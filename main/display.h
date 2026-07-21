@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <string.h>
 #include "esp_err.h"
-
 #include "esp_netif.h"
 #include "event_log.h"
 
@@ -62,18 +61,20 @@ static inline void display_draw_access_point(const char* ssid, esp_netif_ip_info
 /**
  * 
  */
-static inline void display_draw_diagnosis(const DiagnosisEntry *diagnosis_entry) {
+static inline void display_draw_diagnosis(const esp_netif_ip_info_t *ip_info, const DiagnosisEntry *diagnosis_entry) {
     display_clear();
     uint8_t _ixr = 1;
-    display_draw_text(_ixr++, 0, "STATUS", NULL);
+
+
+    char _buf[64];
+    snprintf(_buf, sizeof(_buf), "IP: " IPSTR, IP2STR(&ip_info->ip));
+    display_draw_text(_ixr++, 0, _buf, NULL);
 
     struct tm _timeinfo;
     localtime_r(&diagnosis_entry->timestamp, &_timeinfo);
 
     #if FALSE
     
-    char _buf[32];
-
     // 1. Estrazione della Data (Formato Europeo: GG/MM/AAAA)
     strftime(_buf, sizeof(_buf), "%Y-%m-%d", &_timeinfo);
     display_draw_text(_ixr++, 0, _buf, NULL);
@@ -85,7 +86,6 @@ static inline void display_draw_diagnosis(const DiagnosisEntry *diagnosis_entry)
     #else
 
     _ixr++;
-    char _buf[64];
     // Formattazione: AAAA/MM/GG oo:mm:ss
     strftime(_buf, sizeof(_buf), "%Y/%m/%d %H:%M:%S", &_timeinfo);
     display_draw_text(_ixr++, 0, _buf, NULL);
@@ -93,7 +93,7 @@ static inline void display_draw_diagnosis(const DiagnosisEntry *diagnosis_entry)
     #endif
 
     _ixr++;
-    if (diagnosis_entry->error_mask & DIAG_BIT_OK) {
+    if (diagnosis_entry->error_mask == DIAG_BIT_OK) {
         display_draw_text(_ixr++, 0, "OK", NULL);
     }
     if (diagnosis_entry->error_mask & DIAG_BIT_TIMEOUT) {

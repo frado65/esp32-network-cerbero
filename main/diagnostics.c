@@ -141,7 +141,14 @@ static void diagnostics_task(void *parameters)
         }
 
         record_if_changed(&diagnosis);
-        display_draw_diagnosis(&diagnosis);
+
+        esp_netif_t *sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        esp_netif_ip_info_t sta_ip_info = {0};
+        if (sta_netif != NULL) {
+            esp_netif_get_ip_info(sta_netif, &sta_ip_info);
+        }
+        // Ora puoi passare sta_ip_info (o sta_ip_info.ip) alla funzione del display
+        display_draw_diagnosis(&sta_ip_info, &diagnosis);
 
         TickType_t elapsed = xTaskGetTickCount() - cycle_start;
         int32_t delay_ms = LOOP_TIME_MS - (elapsed * portTICK_PERIOD_MS);
