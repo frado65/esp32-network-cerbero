@@ -130,6 +130,44 @@ static bool receive_request_body(httpd_req_t *req, char *buffer, size_t buffer_s
     return true;
 }
 
+static int hex_to_int(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* Decodifica in-place una stringa URL-encoded (converte '+' in spazio e '%XX' nel corrispondente carattere ASCII) */
+static void url_decode(char *str)
+{
+    if (str == NULL) {
+        return;
+    }
+
+    char *src = str;
+    char *dst = str;
+
+    while (*src != '\0') {
+        if (*src == '+') {
+            *dst++ = ' ';
+            src++;
+        } else if (*src == '%' && src[1] != '\0' && src[2] != '\0') {
+            const int h1 = hex_to_int(src[1]);
+            const int h2 = hex_to_int(src[2]);
+            if (h1 >= 0 && h2 >= 0) {
+                *dst++ = (char)((h1 << 4) | h2);
+                src += 3;
+            } else {
+                *dst++ = *src++;
+            }
+        } else {
+            *dst++ = *src++;
+        }
+    }
+    *dst = '\0';
+}
+
 
 // Converte un byte in una stringa di 8 caratteri binari + \0
 static void byte_to_binary_str(uint8_t byte, char *out_str) {
@@ -235,6 +273,9 @@ static esp_err_t form_hot_handler(httpd_req_t *req) {
     httpd_query_key_value(buf, "ping_ip", g_device_config.ping_ip, sizeof(g_device_config.ping_ip));
     httpd_query_key_value(buf, "ping_host", g_device_config.ping_host, sizeof(g_device_config.ping_host));
 
+    url_decode(g_device_config.ping_ip);
+    url_decode(g_device_config.ping_host);
+
     ESP_LOGI(TAG, "DEBUG3: Valore estratto: [%s] | Hex: %02x %02x %02x", 
          g_device_config.ping_host, 
          g_device_config.ping_host[strlen(g_device_config.ping_host)+1],
@@ -282,9 +323,10 @@ static esp_err_t form_cold_handler(httpd_req_t *req) {
         httpd_query_key_value(buf, "ssid", new_login.ssid, sizeof(new_login.ssid));
         httpd_query_key_value(buf, "pass", new_login.password, sizeof(new_login.password));
 
-        for (size_t i = 0; i < strlen(new_login.ssid); ++i) {
-            if (new_login.ssid[i] == '+') new_login.ssid[i] = ' ';
-        }
+        // Decodifica la stringa da percent-encoding del form HTML (es. %21 -> !, %27 -> ', + -> spazio)
+        url_decode(new_login.ssid);
+        url_decode(new_login.password);
+
         if (new_login.ssid[0] == '\0') {
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Inserire il nuovo SSID");
             return ESP_FAIL;

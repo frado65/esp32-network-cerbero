@@ -21,17 +21,37 @@
 static const char *TAG = "WIFI_MANAGER";
 static EventGroupHandle_t g_wifi_event_group = NULL;
 
+// Helper per registrare SSID e Password nel log prima di tentare la connessione Wi-Fi
+static void log_wifi_credentials_and_connect(void)
+{
+    wifi_config_t _wifi_config;
+    // Recupera la configurazione Wi-Fi Station attualmente impostata nel driver ESP-IDF
+    if (esp_wifi_get_config(WIFI_IF_STA, &_wifi_config) == ESP_OK) {
+        char _ssid_str[33] = {0};
+        char _pass_str[65] = {0};
+        // Copia in sicurezza i buffer per garantire la terminazione con carattere nullo
+        memcpy(_ssid_str, _wifi_config.sta.ssid, sizeof(_wifi_config.sta.ssid));
+        memcpy(_pass_str, _wifi_config.sta.password, sizeof(_wifi_config.sta.password));
+
+        ESP_LOGI(TAG, "Tentativo di connessione Wi-Fi -> SSID: '%s', Password: '%s'", _ssid_str, _pass_str);
+    } else {
+        ESP_LOGI(TAG, "Tentativo di connessione Wi-Fi in corso...");
+    }
+    // Avvia il tentativo di connessione Wi-Fi
+    esp_wifi_connect();
+}
+
 // Callback invocata in background da ESP-IDF quando cambia lo stato del Wi-Fi o dell'IP
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        ESP_LOGI(TAG, "WiFi station started. Connecting...");
-        esp_wifi_connect();
+        ESP_LOGI(TAG, "WiFi station started.");
+        log_wifi_credentials_and_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGW(TAG, "WiFi disconnected. Retrying connection...");
         xEventGroupClearBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
-        esp_wifi_connect();
+        log_wifi_credentials_and_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "WiFi connected! IP: " IPSTR, IP2STR(&event->ip_info.ip));
