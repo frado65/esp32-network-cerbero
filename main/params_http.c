@@ -44,6 +44,8 @@ static const char* g_form_template =
     "label{display:block;margin-top:10px;}"
     "input,select{margin-bottom:10px;padding:5px;width:265px;}"
     "button{display:block;padding:8px 15px;margin-top:10px;cursor:pointer;}"
+    ".btn-del{display:inline-block;padding:6px 12px;margin-left:8px;background:#d9534f;color:#fff;border:none;border-radius:4px;cursor:pointer;}"
+    ".flex-row{display:flex;align-items:center;}"
     "</style></head><body>"
     "<a href='/'>HOME</a>"
     "<h2>Configurazione Operativa (Hot)</h2>"
@@ -54,15 +56,35 @@ static const char* g_form_template =
     "<hr>"
     "<h2>Configurazione Rete (Cold - Riavvio)</h2>"
     "<form method='POST' action='/submit_cold'>"
-    "<label>Hotspot salvato:</label><select name='login_ixp' id='login_ixp' "
-    "onchange='toggleNewLogin()'>%s</select>"
+    "<label>Hotspot salvato:</label>"
+    "<div class='flex-row'>"
+    "<select name='login_ixp' id='login_ixp' onchange='toggleNewLogin()'>%s</select>"
+    "<button type='button' id='btn_delete' class='btn-del' onclick='submitDelete()'>Elimina</button>"
+    "</div>"
     "<div id='new_login'>"
     "<label>Nuovo SSID WiFi:</label><input type='text' name='ssid' maxlength='31'>"
     "<label>Nuova password:</label><input type='password' name='pass' maxlength='63'>"
     "</div>"
-    "<script>function toggleNewLogin(){var n=document.getElementById('login_ixp').value==='-1';"
-    "document.getElementById('new_login').style.display=n?'block':'none';}toggleNewLogin();</script>"
-    "<button type='submit'>Salva e Riavvia</button></form></body></html>";
+    "<script>"
+    "function toggleNewLogin(){"
+    "var v=document.getElementById('login_ixp').value;"
+    "var n=(v==='-1');"
+    "document.getElementById('new_login').style.display=n?'block':'none';"
+    "document.getElementById('btn_delete').style.display=n?'none':'inline-block';"
+    "}"
+    "toggleNewLogin();"
+    "function submitDelete(){"
+    "var v=document.getElementById('login_ixp').value;"
+    "if(v!=='-1' && confirm(\"Confermi l'eliminazione di questo hotspot?\")){"
+    "document.getElementById('del_ixp').value=v;"
+    "document.getElementById('delete_form').submit();"
+    "}"
+    "}"
+    "</script>"
+    "<button type='submit'>Salva e Riavvia</button></form>"
+    "<form method='POST' action='/delete_login' id='delete_form' style='display:none;'>"
+    "<input type='hidden' name='del_ixp' id='del_ixp' value=''>"
+    "</form></body></html>";
 
 static size_t html_escape(const char *source, char *destination, size_t destination_size)
 {
@@ -347,6 +369,43 @@ static esp_err_t form_cold_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// Handler per rimuovere un hotspot salvato in base all'indice logico
+static esp_err_t form_delete_handler(httpd_req_t *req) {
+    char buf[64] = {0};
+    if (!receive_request_body(req, buf, sizeof(buf))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Richiesta non valida");
+        return ESP_FAIL;
+    }
+
+    char del_ixp_string[16] = "-1";
+    httpd_query_key_value(buf, "del_ixp", del_ixp_string, sizeof(del_ixp_string));
+
+    char *end = NULL;
+    /* Estrae l'indice logico dell'hotspot da rimuovere */
+    const long requested_ixp = strtol(del_ixp_string, &end, 10);
+    if (end == del_ixp_string || *end != '\0' || requested_ixp < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Indice hotspot non valido");
+        return ESP_FAIL;
+    }
+
+    /* Rimuove l'hotspot per indice (non per SSID) e ricompatta gli elementi del deposito */
+    if (!login_save_remove(&g_device_config.wifi_logins, (size_t)requested_ixp)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Impossibile rimuovere l'hotspot");
+        return ESP_FAIL;
+    }
+
+    // Salva la nuova configurazione ricompattata in NVS
+    config_save(&g_device_config);
+
+    ESP_LOGI(TAG, "Hotspot all'indice %ld rimosso con successo e deposito ricompattato.", requested_ixp);
+
+    // Reindirizza l'utente alla pagina di configurazione aggiornata
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", "/params");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
 
 static esp_err_t favicon_get_handler(httpd_req_t *req) {
     // Specifichiamo al browser che è un'immagine vettoriale SVG
@@ -514,6 +573,14 @@ esp_err_t start_webserver(void) {
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(g_server, &uri_cold);
+
+        httpd_uri_t uri_delete = {
+            .uri       = "/delete_login",
+            .method    = HTTP_POST,
+            .handler   = form_delete_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(g_server, &uri_delete);
 
         httpd_uri_t uri_favicon = {
             .uri       = "/favicon.ico",

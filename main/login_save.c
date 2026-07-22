@@ -3,6 +3,9 @@
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "esp_log.h"
+
+static const char *TAG = "login_save";
 
 /* Spinlock FreeRTOS condiviso da tutte le operazioni sul deposito. Evita che
  * task HTTP, Wi-Fi e diagnostica leggano la struttura mentre viene modificata. */
@@ -153,12 +156,21 @@ bool login_save_get_current(const wifi_login_store_t *store, wifi_login_t *out_l
 
 bool login_save_remove(wifi_login_store_t *store, size_t ixp)
 {
+    ESP_LOGI(TAG, "login_save_remove: called ...");
     if (store == NULL) {
+        ESP_LOGW(TAG, "login_save_remove: store is NULL");
         return false;
     }
 
+    ESP_LOGI(TAG, "login_save_remove: rimozione voce con indice %u, SSID=%s, PASSWD=%s", 
+            ixp, 
+            store->entries[physical_index(store, ixp)].ssid, 
+            store->entries[physical_index(store, ixp)].password
+        );
+
     portENTER_CRITICAL(&s_login_lock);
     if (ixp >= store->count) {
+        ESP_LOGE(TAG, "login_save_remove: indice errato: %u >= %u", ixp, store->count);
         portEXIT_CRITICAL(&s_login_lock);
         return false;
     }
